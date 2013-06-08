@@ -14,7 +14,7 @@ private[immutable] object implementation {
   sealed trait NodeOps[L, A] {
     type N = Node[L, A]
 
-    val order = 6
+    val order = 32
     val halfOrder = order / 2
 
     def size(node: N): Int
@@ -32,9 +32,9 @@ private[immutable] object implementation {
   }
 
   private def copy(dest: Array[AnyRef], target: Int, source: Array[AnyRef], start: Int, length: Int): Int = {
-    assert(target >= 0, s"$target >= 0")
-    //assert(length >= 0, s"$length >= 0")
-    assert(target + length <= dest.length, s"$target + $length <= ${dest.length}")
+    //    assert(target >= 0, s"$target >= 0")
+    //    assert(length >= 0, s"$length >= 0")
+    //    assert(target + length <= dest.length, s"$target + $length <= ${dest.length}")
     var i = 0
     while (i < length) {
       dest(target + i) = source(start + i)
@@ -43,16 +43,16 @@ private[immutable] object implementation {
     target + i
   }
   private def ins(dest: Array[AnyRef], i: Int, v: AnyRef): Int = {
-    assert(i >= 0, s"$i >= 0")
-    assert(i < dest.length, s"$i < ${dest.length}")
+    //    assert(i >= 0, s"$i >= 0")
+    //    assert(i < dest.length, s"$i < ${dest.length}")
     dest(i) = v
     i + 1
   }
 
   private[immutable] def insertValue(source: Array[AnyRef], start: Int, end: Int, position: Int, value: AnyRef): Array[AnyRef] = {
-    assert(end >= start, "end >= start")
-    assert(start <= position, "start <= position")
-    assert(position <= end, "position <= end")
+    //    assert(end >= start, "end >= start")
+    //    assert(start <= position, "start <= position")
+    //    assert(position <= end, "position <= end")
     val result = new Array[AnyRef](end - start + 1)
     val before = position - start
     var i = copy(result, 0, source, start, before)
@@ -78,7 +78,9 @@ private[immutable] object implementation {
 
   implicit def LeafOps[A: Ordering] = new NodeOps[Leaf, A] {
     override def size(node: N): Int = node.elements.length
-    override def contains(node: N, a: A): Boolean = node.elements.contains(a)
+    override def contains(node: N, a: A): Boolean = {
+      Arrays.binarySearch(node.elements, a.asInstanceOf[AnyRef], castingOrdering[A]) >= 0
+    }
     override def buildCollection(builder: Builder[A, _], node: N): Unit = {
       builder ++= node.elements.asInstanceOf[Array[A]]
     }
@@ -118,19 +120,24 @@ private[immutable] object implementation {
     override def toVector(node: N): Vector[A] = node.elements.asInstanceOf[Array[A]].toVector
   }
 
-  private implicit class DebugOps[A](a: A) {
-    def pp = { /*println(s"$a");*/ a }
-    def pp(msg: String) = { /*println(s"$msg: $a");*/ a }
-  }
   implicit def NextOps[L, A: Ordering](implicit childOps: NodeOps[L, A]): NodeOps[Next[L], A] = new NodeOps[Next[L], A] {
     type ChildNode = childOps.N
 
     private def childCount(node: N): Int = (node.elements.length - 2) / 2
     override def size(node: N): Int = node.elements(0).asInstanceOf[Int]
-    override def contains(node: N, a: A): Boolean = node.elements.contains(a)
+    override def contains(node: N, a: A): Boolean = {
+      val children = childCount(node)
+      val index = Arrays.binarySearch(node.elements, 1, children + 1, a.asInstanceOf[AnyRef], castingOrdering[A])
+      index >= 0 || {
+        val insertionPoint = -index - 1
+        val childIndex = insertionPoint + children
+        val child = node.elements(childIndex).asInstanceOf[childOps.N]
+        childOps.contains(child, a)
+      }
+    }
 
-    private def print(node: N): Unit = {
-      val indices  = (0 until node.elements.length).map(_.formatted("%5d")).mkString(", ")
+    private def print_(node: N): Unit = {
+      val indices = (0 until node.elements.length).map(_.formatted("%5d")).mkString(", ")
       val elts = node.elements.drop(1).take(childCount(node)).map(_.formatted("%5d"))
       val children = node.elements.takeRight(childCount(node) + 1).map { _.asInstanceOf[Node[_, _]].elements.mkString("<", ",", ">") }
       val contents = Seq(f"${size(node)}%5d") ++ elts ++ children mkString (", ")
@@ -164,6 +171,8 @@ private[immutable] object implementation {
           case Left(updatedChild) =>
             val updated = Arrays.copyOf(node.elements, node.elements.length)
             updated(insertionPoint + children) = updatedChild
+            val sizeChange = childOps.size(updatedChild) - childOps.size(child)
+            updated(0) = (updated(0).asInstanceOf[Int] + sizeChange).asInstanceOf[AnyRef]
             Left(new Node(updated))
           case Right((left, middle, right)) =>
             if (children < order) {
@@ -173,24 +182,20 @@ private[immutable] object implementation {
             } else {
               Right(if (insertionPoint < halfOrder + 1) {
                 val l: N = {
-                  middle.pp(s"Splitting left node for key at $insertionPoint")
-                  print(node)
                   val result = new Array[AnyRef](1 + halfOrder + halfOrder + 1)
                   // Keys
                   val before = insertionPoint - 1
-                  require(before >= 0, s"$before >= 0")
-                  var i = copy(result, 1, node.elements, 1.pp(s"keys less (#${before})"), before)
+                  //                  require(before >= 0, s"$before >= 0")
+                  var i = copy(result, 1, node.elements, 1, before)
                   i = ins(result, i, middle.asInstanceOf[AnyRef])
-                  i = copy(result, i, node.elements, insertionPoint.pp(s"keys greater (#${halfOrder - before})"), halfOrder - before - 1)
+                  i = copy(result, i, node.elements, insertionPoint, halfOrder - before - 1)
                   // Children
-                  i = copy(result, i, node.elements, children + 1 pp "children less", before)
+                  i = copy(result, i, node.elements, children + 1, before)
                   i = ins(result, i, left)
                   i = ins(result, i, right)
-                  i = copy(result, i, node.elements, (childIndex + 1).pp("children greater"), halfOrder - before - 1)
-                  require(i == result.length, s"$i == ${result.length}")
-                  val n = updateSize(new Node(result))
-                  print(n)
-                  n
+                  i = copy(result, i, node.elements, childIndex + 1, halfOrder - before - 1)
+                  //                  require(i == result.length, s"$i == ${result.length}")
+                  updateSize(new Node(result))
                 }
                 val m: A = node.elements(halfOrder).asInstanceOf[A]
                 val r: N = {
@@ -209,37 +214,29 @@ private[immutable] object implementation {
                 }
                 val m: A = node.elements(halfOrder + 1).asInstanceOf[A]
                 val r: N = {
-                  middle.pp(s"Splitting right node for key at $insertionPoint")
-                  print(node)
                   val result = new Array[AnyRef](1 + halfOrder + halfOrder + 1)
                   // Keys
                   val before = insertionPoint - 1 - halfOrder
-                  require(before.pp("before") > 0, s"$before > 0")
-                  var i = copy(result, 1, node.elements, (halfOrder + 2).pp(s"keys less (#${before})"), before - 1)
+                  //                  require(before.pp("before") > 0, s"$before > 0")
+                  var i = copy(result, 1, node.elements, halfOrder + 2, before - 1)
                   i = ins(result, i, middle.asInstanceOf[AnyRef])
-                  i = copy(result, i, node.elements, insertionPoint.pp(s"keys greater (#${halfOrder - before})"), halfOrder - before)
+                  i = copy(result, i, node.elements, insertionPoint, halfOrder - before)
                   // Children
-                  i = copy(result, i, node.elements, (children + halfOrder + 2).pp("children less"), before - 1)
+                  i = copy(result, i, node.elements, children + halfOrder + 2, before - 1)
                   i = ins(result, i, left)
                   i = ins(result, i, right)
-                  i = copy(result, i, node.elements, (childIndex + 1).pp("children greater"), halfOrder - before)
-                  require(i == result.length, s"$i == ${result.length}")
-                  val n = updateSize(new Node(result))
-                  print(n)
-                  n
+                  i = copy(result, i, node.elements, childIndex + 1, halfOrder - before)
+                  //                  require(i == result.length, s"$i == ${result.length}")
+                  updateSize(new Node(result))
                 }
                 (l, m, r)
               } else {
-                middle.pp(s"Splitting in the middle at $insertionPoint ($childIndex)")
-                print(node)
                 val l: N = {
                   val result = new Array[AnyRef](1 + halfOrder + halfOrder + 1)
                   var i = copy(result, 1, node.elements, 1, halfOrder)
                   i = copy(result, i, node.elements, 1 + order, halfOrder)
                   result(i) = left
-                  val n = updateSize(new Node(result))
-                  print(n)
-                  n
+                  updateSize(new Node(result))
                 }
                 val m: A = middle
                 val r: N = {
@@ -247,9 +244,7 @@ private[immutable] object implementation {
                   var i = copy(result, 1, node.elements, 1 + halfOrder, halfOrder)
                   i = ins(result, i, right)
                   i = copy(result, i, node.elements, 1 + order + halfOrder + 1, halfOrder)
-                  val n = updateSize(new Node(result))
-                  print(n)
-                  n
+                  updateSize(new Node(result))
                 }
                 (l, m, r)
               })
