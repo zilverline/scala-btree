@@ -11,6 +11,28 @@ private[immutable] object implementation {
   final class Leaf extends Level
   final class Next[L] extends Level
 
+  type Node[L, A] = Array[AnyRef]
+//  class Node[L, A](val elements: Array[AnyRef]) {
+//    def size(implicit ops: NodeOps[L, A]) = ops.size(this)
+//  }
+//  implicit class RichNode[L, A](val node: Node[L, A]) extends AnyVal {
+//    def elements: Array[AnyRef] = node
+//    @deprecated def size: Int = ???
+//  }
+
+  object Node {
+    def leaf[A: Ordering](elements: Array[A]): Node[Leaf, A] = elements.asInstanceOf[Array[AnyRef]]
+    def nonLeaf[L, A: Ordering](left: Node[L, A], middle: A, right: Node[L, A])(implicit childOps: NodeOps[L, A]): Node[Next[L], A] = {
+      val array = new Array[AnyRef](4)
+      array(0) = (1 + childOps.size(left) + childOps.size(right)).asInstanceOf[AnyRef]
+      array(1) = middle.asInstanceOf[AnyRef]
+      array(2) = left
+      array(3) = right
+      array
+//      new Node[Next[L], A](array)
+    }
+  }
+
   sealed trait NodeOps[L, A] {
     type N = Node[L, A]
 
@@ -29,6 +51,210 @@ private[immutable] object implementation {
     }
 
     def buildCollection(builder: Builder[A, _], node: N): Unit
+  }
+
+  implicit def castingOrdering[A](implicit ordering: Ordering[A]): Comparator[AnyRef] = ordering.asInstanceOf[Comparator[AnyRef]]
+
+  implicit def LeafOps[A: Ordering] = new NodeOps[Leaf, A] {
+    override def size(node: N): Int = node.length
+    override def contains(node: N, a: A): Boolean = {
+      Arrays.binarySearch(node, a.asInstanceOf[AnyRef], castingOrdering[A]) >= 0
+    }
+    override def buildCollection(builder: Builder[A, _], node: N): Unit = {
+      builder ++= node.asInstanceOf[Array[A]]
+    }
+
+    override def insert(node: N, a: A): Either[N, (N, A, N)] = {
+      val elt = a.asInstanceOf[AnyRef]
+      val index = Arrays.binarySearch(node, elt, castingOrdering[A])
+      if (index >= 0) {
+        val updated = Arrays.copyOf(node, node.length)
+        updated(index) = elt
+        Left(updated)
+      } else {
+        val insertionPoint = -index - 1
+        if (size(node) < order) {
+          Left(insertValue(node, 0, size(node), insertionPoint, elt))
+        } else {
+          Right(if (insertionPoint < halfOrder) {
+            val left: N = insertValue(node, 0, halfOrder - 1, insertionPoint, elt)
+            val middle: A = node(halfOrder - 1).asInstanceOf[A]
+            val right: N = Arrays.copyOfRange(node, halfOrder, order)
+            (left, middle, right)
+          } else if (insertionPoint > halfOrder) {
+            val left: N = Arrays.copyOfRange(node, 0, halfOrder)
+            val middle: A = node(halfOrder).asInstanceOf[A]
+            val right: N = insertValue(node, halfOrder + 1, order, insertionPoint, elt)
+            (left, middle, right)
+          } else {
+            val left: N = Arrays.copyOfRange(node, 0, halfOrder)
+            val middle: A = a
+            val right: N = Arrays.copyOfRange(node, halfOrder, order)
+            (left, middle, right)
+          })
+        }
+      }
+    }
+
+    override def toVector(node: N): Vector[A] = node.asInstanceOf[Array[A]].toVector
+  }
+
+  implicit def NextOps[L, A: Ordering](implicit childOps: NodeOps[L, A]): NodeOps[Next[L], A] = new NodeOps[Next[L], A] {
+    type ChildNode = childOps.N
+
+    private def childCount(node: N): Int = (node.length - 2) / 2
+    override def size(node: N): Int = node(0).asInstanceOf[Int]
+    override def contains(node: N, a: A): Boolean = {
+      val children = childCount(node)
+      val index = Arrays.binarySearch(node, 1, children + 1, a.asInstanceOf[AnyRef], castingOrdering[A])
+      index >= 0 || {
+        val insertionPoint = -index - 1
+        val childIndex = insertionPoint + children
+        val child = node(childIndex).asInstanceOf[childOps.N]
+        childOps.contains(child, a)
+      }
+    }
+
+    private def print_(node: N): Unit = {
+      val indices = (0 until node.length).map(_.formatted("%5d")).mkString(", ")
+      val elts = node.drop(1).take(childCount(node)).map(_.formatted("%5d"))
+      val children = node.takeRight(childCount(node) + 1).map { _.asInstanceOf[Node[_, _]].mkString("<", ",", ">") }
+      val contents = Seq(f"${size(node)}%5d") ++ elts ++ children mkString (", ")
+      //println(s"$indices\n$contents")
+    }
+
+    private def updateSize(node: N): N = {
+      val children = childCount(node)
+      var i = children + 1
+      var size = children
+      while (i < node.length) {
+        size += childOps.size(node(i).asInstanceOf[Node[L, A]])
+        i += 1
+      }
+      node(0) = size.asInstanceOf[AnyRef]
+      node
+    }
+    override def insert(node: N, a: A): Either[N, (N, A, N)] = {
+      val elt = a.asInstanceOf[AnyRef]
+      val children = childCount(node)
+      val index = Arrays.binarySearch(node, 1, children + 1, elt, castingOrdering[A])
+      if (index >= 0) {
+        val updated = Arrays.copyOf(node, node.length)
+        updated(index) = elt
+        Left(updated)
+      } else {
+        val insertionPoint = -index - 1
+        val childIndex = insertionPoint + children
+        val child = node(childIndex).asInstanceOf[childOps.N]
+        childOps.insert(child, a) match {
+          case Left(updatedChild) =>
+            val updated = Arrays.copyOf(node, node.length)
+            updated(insertionPoint + children) = updatedChild
+            val sizeChange = childOps.size(updatedChild) - childOps.size(child)
+            updated(0) = (updated(0).asInstanceOf[Int] + sizeChange).asInstanceOf[AnyRef]
+            Left(updated)
+          case Right((left, middle, right)) =>
+            if (children < order) {
+              val updated = iiu(node, 0, node.length, insertionPoint, middle.asInstanceOf[AnyRef], childIndex, left, childIndex, right)
+              updated(0) = (updated(0).asInstanceOf[Int] + 1).asInstanceOf[AnyRef]
+              Left(updated)
+            } else {
+              Right(if (insertionPoint < halfOrder + 1) {
+                val l: N = {
+                  val result = new Array[AnyRef](1 + halfOrder + halfOrder + 1)
+                  // Keys
+                  val before = insertionPoint - 1
+                  //                  require(before >= 0, s"$before >= 0")
+                  var i = copy(result, 1, node, 1, before)
+                  i = ins(result, i, middle.asInstanceOf[AnyRef])
+                  i = copy(result, i, node, insertionPoint, halfOrder - before - 1)
+                  // Children
+                  i = copy(result, i, node, children + 1, before)
+                  i = ins(result, i, left)
+                  i = ins(result, i, right)
+                  i = copy(result, i, node, childIndex + 1, halfOrder - before - 1)
+                  //                  require(i == result.length, s"$i == ${result.length}")
+                  updateSize(result)
+                }
+                val m: A = node(halfOrder).asInstanceOf[A]
+                val r: N = {
+                  val result = new Array[AnyRef](1 + halfOrder + halfOrder + 1)
+                  var i = copy(result, 1, node, 1 + halfOrder, halfOrder)
+                  i = copy(result, i, node, 1 + order + halfOrder, halfOrder + 1)
+                  updateSize(result)
+                }
+                (l, m, r)
+              } else if (insertionPoint > halfOrder + 1) {
+                val l: N = {
+                  val result = new Array[AnyRef](1 + halfOrder + halfOrder + 1)
+                  var i = copy(result, 1, node, 1, halfOrder)
+                  i = copy(result, i, node, 1 + order, halfOrder + 1)
+                  updateSize(result)
+                }
+                val m: A = node(halfOrder + 1).asInstanceOf[A]
+                val r: N = {
+                  val result = new Array[AnyRef](1 + halfOrder + halfOrder + 1)
+                  // Keys
+                  val before = insertionPoint - 1 - halfOrder
+                  //                  require(before.pp("before") > 0, s"$before > 0")
+                  var i = copy(result, 1, node, halfOrder + 2, before - 1)
+                  i = ins(result, i, middle.asInstanceOf[AnyRef])
+                  i = copy(result, i, node, insertionPoint, halfOrder - before)
+                  // Children
+                  i = copy(result, i, node, children + halfOrder + 2, before - 1)
+                  i = ins(result, i, left)
+                  i = ins(result, i, right)
+                  i = copy(result, i, node, childIndex + 1, halfOrder - before)
+                  //                  require(i == result.length, s"$i == ${result.length}")
+                  updateSize(result)
+                }
+                (l, m, r)
+              } else {
+                val l: N = {
+                  val result = new Array[AnyRef](1 + halfOrder + halfOrder + 1)
+                  var i = copy(result, 1, node, 1, halfOrder)
+                  i = copy(result, i, node, 1 + order, halfOrder)
+                  result(i) = left
+                  updateSize(result)
+                }
+                val m: A = middle
+                val r: N = {
+                  val result = new Array[AnyRef](1 + halfOrder + halfOrder + 1)
+                  var i = copy(result, 1, node, 1 + halfOrder, halfOrder)
+                  i = ins(result, i, right)
+                  i = copy(result, i, node, 1 + order + halfOrder + 1, halfOrder)
+                  updateSize(result)
+                }
+                (l, m, r)
+              })
+            }
+        }
+      }
+    }
+
+    override def buildCollection(builder: Builder[A, _], node: N): Unit = {
+      val children = childCount(node)
+      var i = 0
+      while (i < children) {
+        val childNode = node(i + children + 1).asInstanceOf[ChildNode]
+        childOps.buildCollection(builder, childNode)
+        builder += node(i + 1).asInstanceOf[A]
+        i += 1
+      }
+      childOps.buildCollection(builder, node.last.asInstanceOf[ChildNode])
+    }
+  }
+
+  class Root[L, A: Ordering](val root: Node[L, A])(implicit val ops: NodeOps[L, A]) extends BTree[A] {
+    override def +(a: A) = ops.insert(root, a) match {
+      case Left(node)                   => new Root[L, A](node)
+      case Right((left, middle, right)) => new Root[Next[L], A](Node.nonLeaf(left, middle, right))
+    }
+    override def isEmpty: Boolean = size == 0
+    override def nonEmpty: Boolean = !isEmpty
+    override def size: Int = ops.size(root)
+    override def contains(a: A): Boolean = ops.contains(root, a)
+    override def toVector: Vector[A] = ops.toVector(root)
   }
 
   private def copy(dest: Array[AnyRef], target: Int, source: Array[AnyRef], start: Int, length: Int): Int = {
@@ -72,227 +298,6 @@ private[immutable] object implementation {
     result
   }
 
-  implicit def castingOrdering[A](implicit ordering: Ordering[A]): Comparator[AnyRef] = new Comparator[AnyRef] {
-    override def compare(x: AnyRef, y: AnyRef): Int = ordering.compare(x.asInstanceOf[A], y.asInstanceOf[A])
-  }
-
-  implicit def LeafOps[A: Ordering] = new NodeOps[Leaf, A] {
-    override def size(node: N): Int = node.elements.length
-    override def contains(node: N, a: A): Boolean = {
-      Arrays.binarySearch(node.elements, a.asInstanceOf[AnyRef], castingOrdering[A]) >= 0
-    }
-    override def buildCollection(builder: Builder[A, _], node: N): Unit = {
-      builder ++= node.elements.asInstanceOf[Array[A]]
-    }
-
-    override def insert(node: N, a: A): Either[N, (N, A, N)] = {
-      val elt = a.asInstanceOf[AnyRef]
-      val index = Arrays.binarySearch(node.elements, elt, castingOrdering[A])
-      if (index >= 0) {
-        val updated = Arrays.copyOf(node.elements, node.elements.length)
-        updated(index) = elt
-        Left(new Node(updated))
-      } else {
-        val insertionPoint = -index - 1
-        if (size(node) < order) {
-          Left(new Node(insertValue(node.elements, 0, size(node), insertionPoint, elt)))
-        } else {
-          Right(if (insertionPoint < halfOrder) {
-            val left: N = new Node(insertValue(node.elements, 0, halfOrder - 1, insertionPoint, elt))
-            val middle: A = node.elements(halfOrder - 1).asInstanceOf[A]
-            val right: N = new Node(Arrays.copyOfRange(node.elements, halfOrder, order))
-            (left, middle, right)
-          } else if (insertionPoint > halfOrder) {
-            val left: N = new Node(Arrays.copyOfRange(node.elements, 0, halfOrder))
-            val middle: A = node.elements(halfOrder).asInstanceOf[A]
-            val right: N = new Node(insertValue(node.elements, halfOrder + 1, order, insertionPoint, elt))
-            (left, middle, right)
-          } else {
-            val left: N = new Node(Arrays.copyOfRange(node.elements, 0, halfOrder))
-            val middle: A = a
-            val right: N = new Node(Arrays.copyOfRange(node.elements, halfOrder, order))
-            (left, middle, right)
-          })
-        }
-      }
-    }
-
-    override def toVector(node: N): Vector[A] = node.elements.asInstanceOf[Array[A]].toVector
-  }
-
-  implicit def NextOps[L, A: Ordering](implicit childOps: NodeOps[L, A]): NodeOps[Next[L], A] = new NodeOps[Next[L], A] {
-    type ChildNode = childOps.N
-
-    private def childCount(node: N): Int = (node.elements.length - 2) / 2
-    override def size(node: N): Int = node.elements(0).asInstanceOf[Int]
-    override def contains(node: N, a: A): Boolean = {
-      val children = childCount(node)
-      val index = Arrays.binarySearch(node.elements, 1, children + 1, a.asInstanceOf[AnyRef], castingOrdering[A])
-      index >= 0 || {
-        val insertionPoint = -index - 1
-        val childIndex = insertionPoint + children
-        val child = node.elements(childIndex).asInstanceOf[childOps.N]
-        childOps.contains(child, a)
-      }
-    }
-
-    private def print_(node: N): Unit = {
-      val indices = (0 until node.elements.length).map(_.formatted("%5d")).mkString(", ")
-      val elts = node.elements.drop(1).take(childCount(node)).map(_.formatted("%5d"))
-      val children = node.elements.takeRight(childCount(node) + 1).map { _.asInstanceOf[Node[_, _]].elements.mkString("<", ",", ">") }
-      val contents = Seq(f"${size(node)}%5d") ++ elts ++ children mkString (", ")
-      //println(s"$indices\n$contents")
-    }
-
-    private def updateSize(node: N): N = {
-      val children = childCount(node)
-      var i = children + 1
-      var size = children
-      while (i < node.elements.length) {
-        size += childOps.size(node.elements(i).asInstanceOf[Node[L, A]])
-        i += 1
-      }
-      node.elements(0) = size.asInstanceOf[AnyRef]
-      node
-    }
-    override def insert(node: N, a: A): Either[N, (N, A, N)] = {
-      val elt = a.asInstanceOf[AnyRef]
-      val children = childCount(node)
-      val index = Arrays.binarySearch(node.elements, 1, children + 1, elt, castingOrdering[A])
-      if (index >= 0) {
-        val updated = Arrays.copyOf(node.elements, node.elements.length)
-        updated(index) = elt
-        Left(new Node(updated))
-      } else {
-        val insertionPoint = -index - 1
-        val childIndex = insertionPoint + children
-        val child = node.elements(childIndex).asInstanceOf[childOps.N]
-        childOps.insert(child, a) match {
-          case Left(updatedChild) =>
-            val updated = Arrays.copyOf(node.elements, node.elements.length)
-            updated(insertionPoint + children) = updatedChild
-            val sizeChange = childOps.size(updatedChild) - childOps.size(child)
-            updated(0) = (updated(0).asInstanceOf[Int] + sizeChange).asInstanceOf[AnyRef]
-            Left(new Node(updated))
-          case Right((left, middle, right)) =>
-            if (children < order) {
-              val updated = iiu(node.elements, 0, node.elements.length, insertionPoint, middle.asInstanceOf[AnyRef], childIndex, left, childIndex, right)
-              updated(0) = (updated(0).asInstanceOf[Int] + 1).asInstanceOf[AnyRef]
-              Left(new Node(updated))
-            } else {
-              Right(if (insertionPoint < halfOrder + 1) {
-                val l: N = {
-                  val result = new Array[AnyRef](1 + halfOrder + halfOrder + 1)
-                  // Keys
-                  val before = insertionPoint - 1
-                  //                  require(before >= 0, s"$before >= 0")
-                  var i = copy(result, 1, node.elements, 1, before)
-                  i = ins(result, i, middle.asInstanceOf[AnyRef])
-                  i = copy(result, i, node.elements, insertionPoint, halfOrder - before - 1)
-                  // Children
-                  i = copy(result, i, node.elements, children + 1, before)
-                  i = ins(result, i, left)
-                  i = ins(result, i, right)
-                  i = copy(result, i, node.elements, childIndex + 1, halfOrder - before - 1)
-                  //                  require(i == result.length, s"$i == ${result.length}")
-                  updateSize(new Node(result))
-                }
-                val m: A = node.elements(halfOrder).asInstanceOf[A]
-                val r: N = {
-                  val result = new Array[AnyRef](1 + halfOrder + halfOrder + 1)
-                  var i = copy(result, 1, node.elements, 1 + halfOrder, halfOrder)
-                  i = copy(result, i, node.elements, 1 + order + halfOrder, halfOrder + 1)
-                  updateSize(new Node(result))
-                }
-                (l, m, r)
-              } else if (insertionPoint > halfOrder + 1) {
-                val l: N = {
-                  val result = new Array[AnyRef](1 + halfOrder + halfOrder + 1)
-                  var i = copy(result, 1, node.elements, 1, halfOrder)
-                  i = copy(result, i, node.elements, 1 + order, halfOrder + 1)
-                  updateSize(new Node(result))
-                }
-                val m: A = node.elements(halfOrder + 1).asInstanceOf[A]
-                val r: N = {
-                  val result = new Array[AnyRef](1 + halfOrder + halfOrder + 1)
-                  // Keys
-                  val before = insertionPoint - 1 - halfOrder
-                  //                  require(before.pp("before") > 0, s"$before > 0")
-                  var i = copy(result, 1, node.elements, halfOrder + 2, before - 1)
-                  i = ins(result, i, middle.asInstanceOf[AnyRef])
-                  i = copy(result, i, node.elements, insertionPoint, halfOrder - before)
-                  // Children
-                  i = copy(result, i, node.elements, children + halfOrder + 2, before - 1)
-                  i = ins(result, i, left)
-                  i = ins(result, i, right)
-                  i = copy(result, i, node.elements, childIndex + 1, halfOrder - before)
-                  //                  require(i == result.length, s"$i == ${result.length}")
-                  updateSize(new Node(result))
-                }
-                (l, m, r)
-              } else {
-                val l: N = {
-                  val result = new Array[AnyRef](1 + halfOrder + halfOrder + 1)
-                  var i = copy(result, 1, node.elements, 1, halfOrder)
-                  i = copy(result, i, node.elements, 1 + order, halfOrder)
-                  result(i) = left
-                  updateSize(new Node(result))
-                }
-                val m: A = middle
-                val r: N = {
-                  val result = new Array[AnyRef](1 + halfOrder + halfOrder + 1)
-                  var i = copy(result, 1, node.elements, 1 + halfOrder, halfOrder)
-                  i = ins(result, i, right)
-                  i = copy(result, i, node.elements, 1 + order + halfOrder + 1, halfOrder)
-                  updateSize(new Node(result))
-                }
-                (l, m, r)
-              })
-            }
-        }
-      }
-    }
-
-    override def buildCollection(builder: Builder[A, _], node: N): Unit = {
-      val children = childCount(node)
-      var i = 0
-      while (i < children) {
-        val childNode = node.elements(i + children + 1).asInstanceOf[ChildNode]
-        childOps.buildCollection(builder, childNode)
-        builder += node.elements(i + 1).asInstanceOf[A]
-        i += 1
-      }
-      childOps.buildCollection(builder, node.elements.last.asInstanceOf[ChildNode])
-    }
-  }
-
-  class Node[L, A](val elements: Array[AnyRef]) {
-    def size(implicit ops: NodeOps[L, A]) = ops.size(this)
-  }
-
-  object Node {
-    def leaf[A: Ordering](elements: Array[A]): Node[Leaf, A] = new Node[Leaf, A](elements.asInstanceOf[Array[AnyRef]])
-    def nonLeaf[L, A: Ordering](left: Node[L, A], middle: A, right: Node[L, A])(implicit childOps: NodeOps[L, A]): Node[Next[L], A] = {
-      val array = new Array[AnyRef](4)
-      array(0) = (1 + left.size + right.size).asInstanceOf[AnyRef]
-      array(1) = middle.asInstanceOf[AnyRef]
-      array(2) = left
-      array(3) = right
-      new Node[Next[L], A](array)
-    }
-  }
-
-  class Root[L, A: Ordering](val root: Node[L, A])(implicit val ops: NodeOps[L, A]) extends BTree[A] {
-    override def +(a: A) = ops.insert(root, a) match {
-      case Left(node)                   => new Root[L, A](node)
-      case Right((left, middle, right)) => new Root(Node.nonLeaf(left, middle, right))
-    }
-    override def isEmpty: Boolean = size == 0
-    override def nonEmpty: Boolean = !isEmpty
-    override def size: Int = ops.size(root)
-    override def contains(a: A): Boolean = ops.contains(root, a)
-    override def toVector: Vector[A] = ops.toVector(root)
-  }
 }
 
 trait BTree[A] {
@@ -307,5 +312,5 @@ object BTree {
   import implementation._
 
   def apply[A: Ordering](elements: A*): BTree[A] = elements.foldLeft(BTree.empty[A])(_ + _)
-  def empty[A: Ordering]: BTree[A] = new Root[Leaf, A](new Node(Array.empty[AnyRef]))
+  def empty[A: Ordering]: BTree[A] = new Root[Leaf, A](Array.empty[AnyRef])
 }
