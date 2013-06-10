@@ -11,38 +11,77 @@ private[immutable] object implementation {
   final class Leaf extends Level
   final class Next[L] extends Level
 
-  type Node[L, A] = Array[AnyRef]
-//  class Node[L, A](val elements: Array[AnyRef]) {
-//    def size(implicit ops: NodeOps[L, A]) = ops.size(this)
-//  }
-//  implicit class RichNode[L, A](val node: Node[L, A]) extends AnyVal {
-//    def elements: Array[AnyRef] = node
-//    @deprecated def size: Int = ???
-//  }
+  type Tagged[U] = { type Tag = U }
+  type @@[T, U] = T with Tagged[U]
+
+  type Node[L, A] = Array[AnyRef] @@ (L, A)
+
+  class NodeBuilder[L, A] {
+    private var node: Node[L, A] = _
+    private var index: Int = _
+
+    final def result(): Node[L, A] = {
+      val r = node
+      node = null
+      index = -1
+      r
+    }
+    final def allocLeaf(n: Int)(implicit ev: L =:= Leaf) = {
+      node = new Array[AnyRef](n).asInstanceOf[Node[L, A]]
+      index = 0
+      node
+    }
+    final def allocInternal(n: Int)(implicit ev: L <:< Next[_]) = {
+      node = new Array[AnyRef](1 + n + n + 1).asInstanceOf[Node[L, A]]
+      index = 0
+      node
+    }
+    final def setSize(size: Int)(implicit ev: L <:< Next[_]) = node(0) = size.asInstanceOf[AnyRef]
+
+    final def copy(source: Node[L, A], from: Int, to: Int): Unit = {
+      //    assert(target >= 0, s"$target >= 0")
+      //    assert(length >= 0, s"$length >= 0")
+      //    assert(target + length <= dest.length, s"$target + $length <= ${dest.length}")
+      var i = 0
+      while (i < to - from) {
+        node(index + i) = source(from + i)
+        i += 1
+      }
+      index += to - from
+    }
+    @inline final def insertValue(v: A): Unit = {
+      //    assert(i >= 0, s"$i >= 0")
+      //    assert(i < dest.length, s"$i < ${dest.length}")
+      node(index) = v.asInstanceOf[AnyRef]
+      index += 1
+    }
+    @inline final def insertChild[M](v: Node[M, A])(implicit ev: L =:= Next[M]): Unit = {
+      //    assert(i >= 0, s"$i >= 0")
+      //    assert(i < dest.length, s"$i < ${dest.length}")
+      node(index) = v.asInstanceOf[AnyRef]
+      index += 1
+    }
+  }
 
   object Node {
-    def leaf[A: Ordering](elements: Array[A]): Node[Leaf, A] = elements.asInstanceOf[Array[AnyRef]]
+    def leaf[A: Ordering](elements: Array[A]): Node[Leaf, A] = elements.asInstanceOf[Node[Leaf, A]]
     def nonLeaf[L, A: Ordering](left: Node[L, A], middle: A, right: Node[L, A])(implicit childOps: NodeOps[L, A]): Node[Next[L], A] = {
-      val array = new Array[AnyRef](4)
+      val array = new Array[AnyRef](4).asInstanceOf[Node[Next[L], A]]
       array(0) = (1 + childOps.size(left) + childOps.size(right)).asInstanceOf[AnyRef]
       array(1) = middle.asInstanceOf[AnyRef]
       array(2) = left
       array(3) = right
       array
-//      new Node[Next[L], A](array)
     }
   }
 
   sealed trait NodeOps[L, A] {
     type N = Node[L, A]
 
-    val order = 32
-    val halfOrder = order / 2
-
     def size(node: N): Int
 
     def contains(node: N, a: A): Boolean
-    def insert(node: N, a: A): Either[N, (N, A, N)]
+    def insert(node: N, a: A)(implicit builder: NodeBuilder[L, A]): Either[N, (N, A, N)]
 
     def toVector(node: N): Vector[A] = {
       val builder = Vector.newBuilder[A]
@@ -56,40 +95,38 @@ private[immutable] object implementation {
   implicit def castingOrdering[A](implicit ordering: Ordering[A]): Comparator[AnyRef] = ordering.asInstanceOf[Comparator[AnyRef]]
 
   implicit def LeafOps[A: Ordering] = new NodeOps[Leaf, A] {
+    val order = 32
+    val halfOrder = order / 2
+
     override def size(node: N): Int = node.length
-    override def contains(node: N, a: A): Boolean = {
-      Arrays.binarySearch(node, a.asInstanceOf[AnyRef], castingOrdering[A]) >= 0
-    }
+    override def contains(node: N, a: A): Boolean = search(node, a) >= 0
     override def buildCollection(builder: Builder[A, _], node: N): Unit = {
       builder ++= node.asInstanceOf[Array[A]]
     }
 
-    override def insert(node: N, a: A): Either[N, (N, A, N)] = {
-      val elt = a.asInstanceOf[AnyRef]
-      val index = Arrays.binarySearch(node, elt, castingOrdering[A])
+    override def insert(node: N, a: A)(implicit builder: NodeBuilder[Leaf, A]): Either[N, (N, A, N)] = {
+      val index = search(node, a)
       if (index >= 0) {
-        val updated = Arrays.copyOf(node, node.length)
-        updated(index) = elt
-        Left(updated)
+        Left(copyAndUpdateValue(node, 0, node.length, index, a))
       } else {
         val insertionPoint = -index - 1
         if (size(node) < order) {
-          Left(insertValue(node, 0, size(node), insertionPoint, elt))
+          Left(copyAndInsertValue(node, 0, size(node), insertionPoint, a))
         } else {
           Right(if (insertionPoint < halfOrder) {
-            val left: N = insertValue(node, 0, halfOrder - 1, insertionPoint, elt)
+            val left: N = copyAndInsertValue(node, 0, halfOrder - 1, insertionPoint, a)
             val middle: A = node(halfOrder - 1).asInstanceOf[A]
-            val right: N = Arrays.copyOfRange(node, halfOrder, order)
+            val right: N = copyOfRange(node, halfOrder, order)
             (left, middle, right)
           } else if (insertionPoint > halfOrder) {
-            val left: N = Arrays.copyOfRange(node, 0, halfOrder)
+            val left: N = copyOfRange(node, 0, halfOrder)
             val middle: A = node(halfOrder).asInstanceOf[A]
-            val right: N = insertValue(node, halfOrder + 1, order, insertionPoint, elt)
+            val right: N = copyAndInsertValue(node, halfOrder + 1, order, insertionPoint, a)
             (left, middle, right)
           } else {
-            val left: N = Arrays.copyOfRange(node, 0, halfOrder)
+            val left: N = copyOfRange(node, 0, halfOrder)
             val middle: A = a
-            val right: N = Arrays.copyOfRange(node, halfOrder, order)
+            val right: N = copyOfRange(node, halfOrder, order)
             (left, middle, right)
           })
         }
@@ -97,10 +134,33 @@ private[immutable] object implementation {
     }
 
     override def toVector(node: N): Vector[A] = node.asInstanceOf[Array[A]].toVector
+
+    @inline private def search(node: N, a: A): Int = Arrays.binarySearch(node, a.asInstanceOf[AnyRef], castingOrdering[A])
+  }
+
+  @inline private def copyOfRange[L, A](source: Node[L, A], from: Int, to: Int): Node[L, A] = Arrays.copyOfRange(source, from, to).asInstanceOf[Node[L, A]]
+  @inline private def copyAndUpdateValue[L, A](node: Node[L, A], from: Int, to: Int, index: Int, value: A): Node[L, A] = {
+    val result = copyOfRange(node, from, to)
+    result(index - from) = value.asInstanceOf[AnyRef]
+    result
+  }
+  @inline private[immutable] def copyAndInsertValue[L, A](source: Node[L, A], from: Int, to: Int, position: Int, value: A): Node[L, A] = {
+    //    assert(end >= start, "end >= start")
+    //    assert(start <= position, "start <= position")
+    //    assert(position <= end, "position <= end")
+    val result = new Array[AnyRef](to - from + 1).asInstanceOf[Node[L, A]]
+    val before = position - from
+    var i = copy(result, 0, source, from, before)
+    i = insertValue(result, i, value)
+    i = copy(result, i, source, position, to - position)
+    result
   }
 
   implicit def NextOps[L, A: Ordering](implicit childOps: NodeOps[L, A]): NodeOps[Next[L], A] = new NodeOps[Next[L], A] {
     type ChildNode = childOps.N
+
+    val order = 16
+    val halfOrder = order / 2
 
     private def childCount(node: N): Int = (node.length - 2) / 2
     override def size(node: N): Int = node(0).asInstanceOf[Int]
@@ -134,51 +194,62 @@ private[immutable] object implementation {
       node(0) = size.asInstanceOf[AnyRef]
       node
     }
-    override def insert(node: N, a: A): Either[N, (N, A, N)] = {
+    override def insert(node: N, a: A)(implicit builder: NodeBuilder[Next[L], A]): Either[N, (N, A, N)] = {
       val elt = a.asInstanceOf[AnyRef]
       val children = childCount(node)
       val index = Arrays.binarySearch(node, 1, children + 1, elt, castingOrdering[A])
       if (index >= 0) {
-        val updated = Arrays.copyOf(node, node.length)
-        updated(index) = elt
-        Left(updated)
+        Left(copyAndUpdateValue(node, 0, node.length, index, a))
       } else {
         val insertionPoint = -index - 1
         val childIndex = insertionPoint + children
         val child = node(childIndex).asInstanceOf[childOps.N]
-        childOps.insert(child, a) match {
+        childOps.insert(child, a)(builder.asInstanceOf[NodeBuilder[L, A]]) match {
           case Left(updatedChild) =>
-            val updated = Arrays.copyOf(node, node.length)
-            updated(insertionPoint + children) = updatedChild
+            val updated = copyOfRange(node, 0, node.length)
+            updated(childIndex) = updatedChild
             val sizeChange = childOps.size(updatedChild) - childOps.size(child)
             updated(0) = (updated(0).asInstanceOf[Int] + sizeChange).asInstanceOf[AnyRef]
             Left(updated)
           case Right((left, middle, right)) =>
             if (children < order) {
-              val updated = iiu(node, 0, node.length, insertionPoint, middle.asInstanceOf[AnyRef], childIndex, left, childIndex, right)
+//              builder.allocInternal(children + 1)
+//              builder.copy(node, 0, insertionPoint)
+//              builder.insertValue(middle)
+//              builder.copy(node, insertionPoint, childIndex)
+//              builder.insertChild(left)
+//              builder.insertChild(right)
+//              builder.copy(node, childIndex + 1, node.length)
+//              builder.setSize(node(0).asInstanceOf[Int] + 1)
+//              Left(builder.result())
+              val updated = new Array[AnyRef](node.length + 2).asInstanceOf[N]
+              var i = copy(updated, 0, node, 0, insertionPoint)
+              i = insertValue(updated, i, middle)
+              i = copy(updated, i, node, insertionPoint, childIndex - insertionPoint)
+              i = insertChild(updated, i, left)
+              i = insertChild(updated, i, right)
+              i = copy(updated, i, node, childIndex + 1, node.length - childIndex - 1)
               updated(0) = (updated(0).asInstanceOf[Int] + 1).asInstanceOf[AnyRef]
               Left(updated)
             } else {
               Right(if (insertionPoint < halfOrder + 1) {
                 val l: N = {
-                  val result = new Array[AnyRef](1 + halfOrder + halfOrder + 1)
+                  val result = allocSplitNode
                   // Keys
                   val before = insertionPoint - 1
-                  //                  require(before >= 0, s"$before >= 0")
                   var i = copy(result, 1, node, 1, before)
-                  i = ins(result, i, middle.asInstanceOf[AnyRef])
+                  i = insertValue(result, i, middle)
                   i = copy(result, i, node, insertionPoint, halfOrder - before - 1)
                   // Children
                   i = copy(result, i, node, children + 1, before)
-                  i = ins(result, i, left)
-                  i = ins(result, i, right)
+                  i = insertChild(result, i, left)
+                  i = insertChild(result, i, right)
                   i = copy(result, i, node, childIndex + 1, halfOrder - before - 1)
-                  //                  require(i == result.length, s"$i == ${result.length}")
                   updateSize(result)
                 }
                 val m: A = node(halfOrder).asInstanceOf[A]
                 val r: N = {
-                  val result = new Array[AnyRef](1 + halfOrder + halfOrder + 1)
+                  val result = allocSplitNode
                   var i = copy(result, 1, node, 1 + halfOrder, halfOrder)
                   i = copy(result, i, node, 1 + order + halfOrder, halfOrder + 1)
                   updateSize(result)
@@ -186,32 +257,30 @@ private[immutable] object implementation {
                 (l, m, r)
               } else if (insertionPoint > halfOrder + 1) {
                 val l: N = {
-                  val result = new Array[AnyRef](1 + halfOrder + halfOrder + 1)
+                  val result = allocSplitNode
                   var i = copy(result, 1, node, 1, halfOrder)
                   i = copy(result, i, node, 1 + order, halfOrder + 1)
                   updateSize(result)
                 }
                 val m: A = node(halfOrder + 1).asInstanceOf[A]
                 val r: N = {
-                  val result = new Array[AnyRef](1 + halfOrder + halfOrder + 1)
+                  val result = allocSplitNode
                   // Keys
                   val before = insertionPoint - 1 - halfOrder
-                  //                  require(before.pp("before") > 0, s"$before > 0")
                   var i = copy(result, 1, node, halfOrder + 2, before - 1)
-                  i = ins(result, i, middle.asInstanceOf[AnyRef])
+                  i = insertValue(result, i, middle)
                   i = copy(result, i, node, insertionPoint, halfOrder - before)
                   // Children
                   i = copy(result, i, node, children + halfOrder + 2, before - 1)
-                  i = ins(result, i, left)
-                  i = ins(result, i, right)
+                  i = insertChild(result, i, left)
+                  i = insertChild(result, i, right)
                   i = copy(result, i, node, childIndex + 1, halfOrder - before)
-                  //                  require(i == result.length, s"$i == ${result.length}")
                   updateSize(result)
                 }
                 (l, m, r)
               } else {
                 val l: N = {
-                  val result = new Array[AnyRef](1 + halfOrder + halfOrder + 1)
+                  val result = allocSplitNode
                   var i = copy(result, 1, node, 1, halfOrder)
                   i = copy(result, i, node, 1 + order, halfOrder)
                   result(i) = left
@@ -219,9 +288,9 @@ private[immutable] object implementation {
                 }
                 val m: A = middle
                 val r: N = {
-                  val result = new Array[AnyRef](1 + halfOrder + halfOrder + 1)
+                  val result = allocSplitNode
                   var i = copy(result, 1, node, 1 + halfOrder, halfOrder)
-                  i = ins(result, i, right)
+                  i = insertChild(result, i, right)
                   i = copy(result, i, node, 1 + order + halfOrder + 1, halfOrder)
                   updateSize(result)
                 }
@@ -230,7 +299,10 @@ private[immutable] object implementation {
             }
         }
       }
+
     }
+
+    @inline private def allocSplitNode: N = new Array[AnyRef](1 + halfOrder + halfOrder + 1).asInstanceOf[N]
 
     override def buildCollection(builder: Builder[A, _], node: N): Unit = {
       val children = childCount(node)
@@ -246,6 +318,7 @@ private[immutable] object implementation {
   }
 
   class Root[L, A: Ordering](val root: Node[L, A])(implicit val ops: NodeOps[L, A]) extends BTree[A] {
+    implicit def newBuilder: NodeBuilder[L, A] = new NodeBuilder[L, A]()
     override def +(a: A) = ops.insert(root, a) match {
       case Left(node)                   => new Root[L, A](node)
       case Right((left, middle, right)) => new Root[Next[L], A](Node.nonLeaf(left, middle, right))
@@ -257,7 +330,7 @@ private[immutable] object implementation {
     override def toVector: Vector[A] = ops.toVector(root)
   }
 
-  private def copy(dest: Array[AnyRef], target: Int, source: Array[AnyRef], start: Int, length: Int): Int = {
+  private def copy[L, A](dest: Node[L, A], target: Int, source: Node[L, A], start: Int, length: Int): Int = {
     //    assert(target >= 0, s"$target >= 0")
     //    assert(length >= 0, s"$length >= 0")
     //    assert(target + length <= dest.length, s"$target + $length <= ${dest.length}")
@@ -268,36 +341,18 @@ private[immutable] object implementation {
     }
     target + i
   }
-  private def ins(dest: Array[AnyRef], i: Int, v: AnyRef): Int = {
+  @inline private def insertValue[L, A](dest: Node[L, A], i: Int, v: A): Int = {
     //    assert(i >= 0, s"$i >= 0")
     //    assert(i < dest.length, s"$i < ${dest.length}")
-    dest(i) = v
+    dest(i) = v.asInstanceOf[AnyRef]
     i + 1
   }
-
-  private[immutable] def insertValue(source: Array[AnyRef], start: Int, end: Int, position: Int, value: AnyRef): Array[AnyRef] = {
-    //    assert(end >= start, "end >= start")
-    //    assert(start <= position, "start <= position")
-    //    assert(position <= end, "position <= end")
-    val result = new Array[AnyRef](end - start + 1)
-    val before = position - start
-    var i = copy(result, 0, source, start, before)
-    i = ins(result, i, value)
-    i = copy(result, i, source, position, end - position)
-    result
+  @inline private def insertChild[L, A](dest: Node[Next[L], A], i: Int, v: Node[L, A]): Int = {
+    //    assert(i >= 0, s"$i >= 0")
+    //    assert(i < dest.length, s"$i < ${dest.length}")
+    dest(i) = v.asInstanceOf[AnyRef]
+    i + 1
   }
-  private[immutable] def iiu(source: Array[AnyRef], start: Int, end: Int, ii1: Int, iv1: AnyRef, ii2: Int, iv2: AnyRef, ui: Int, uv: AnyRef): Array[AnyRef] = {
-    val result = new Array[AnyRef](end - start + 2)
-    var i = copy(result, 0, source, start, ii1 - start)
-    i = ins(result, i, iv1)
-    i = copy(result, i, source, ii1, ii2 - ii1)
-    i = ins(result, i, iv2)
-    i = copy(result, i, source, ii2, ui - ii2)
-    i = ins(result, i, uv)
-    i = copy(result, i, source, ui + 1, end - ui - 1)
-    result
-  }
-
 }
 
 trait BTree[A] {
@@ -312,5 +367,5 @@ object BTree {
   import implementation._
 
   def apply[A: Ordering](elements: A*): BTree[A] = elements.foldLeft(BTree.empty[A])(_ + _)
-  def empty[A: Ordering]: BTree[A] = new Root[Leaf, A](Array.empty[AnyRef])
+  def empty[A: Ordering]: BTree[A] = new Root[Leaf, A](Array.empty[AnyRef].asInstanceOf[Node[Leaf, A]])
 }

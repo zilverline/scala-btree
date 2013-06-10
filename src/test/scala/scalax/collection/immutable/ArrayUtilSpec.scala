@@ -7,7 +7,7 @@ import org.scalacheck.Arbitrary
 import scala.reflect.ClassTag
 
 class ArrayUtilSpec extends org.specs2.Specification with org.specs2.ScalaCheck {
-  import implementation.insertValue
+  import implementation._
 
   def is = s2"""
 Array utilities
@@ -34,25 +34,25 @@ Partially copy an array and insert a single value
   }
   def insertValueIncreasesLength = Prop.forAllNoShrink(ArbitraryListAndInsertionValue[java.lang.Integer]) {
     case (list, start, end, insertionPoint, value) =>
-      val array = list.toArray[AnyRef]
-      insertValue(array, start, end, insertionPoint, value).length must_== (end - start + 1)
+      val array = list.toArray[AnyRef].asInstanceOf[Node[Leaf, java.lang.Integer]]
+      copyAndInsertValue(array, start, end, insertionPoint, value).length must_== (end - start + 1)
   }
   def insertValueKeepLowerElementsSame = Prop.forAllNoShrink(ArbitraryListAndInsertionValue[java.lang.Integer]) {
     case (list, start, end, insertionPoint, value) =>
-      val array = list.toArray[AnyRef]
-      val inserted = insertValue(array, start, end, insertionPoint, value)
+      val array = list.toArray[AnyRef].asInstanceOf[Node[Leaf, java.lang.Integer]]
+      val inserted = copyAndInsertValue(array, start, end, insertionPoint, value)
       (start until insertionPoint).forall { i => array(i) aka s"element $i" must_== inserted(i - start) }
   }
   def insertValueShiftAfterInsertionPoint = Prop.forAllNoShrink(ArbitraryListAndInsertionValue[java.lang.Integer]) {
     case (list, start, end, insertionPoint, value) =>
-      val array = list.toArray[AnyRef]
-      val inserted = insertValue(array, start, end, insertionPoint, value)
+      val array = list.toArray[AnyRef].asInstanceOf[Node[Leaf, java.lang.Integer]]
+      val inserted = copyAndInsertValue(array, start, end, insertionPoint, value)
       (insertionPoint until end).forall { i => array(i) aka s"element $i" must_== inserted(i + 1 - start) }
   }
   def insertValueIsInserted = Prop.forAllNoShrink(ArbitraryListAndInsertionValue[java.lang.Integer]) {
     case (list, start, end, insertionPoint, value) =>
-      val array = list.toArray[AnyRef]
-      val inserted = insertValue(array, start, end, insertionPoint, value)
+      val array = list.toArray[AnyRef].asInstanceOf[Node[Leaf, java.lang.Integer]]
+      val inserted = copyAndInsertValue(array, start, end, insertionPoint, value)
       inserted(insertionPoint - start) aka "inserted value" must_== value
   }
 }
