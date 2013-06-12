@@ -5,6 +5,7 @@ import org.scalacheck.Arbitrary.arbitrary
 import org.scalacheck.Prop
 import org.scalacheck.Arbitrary
 import org.specs2.matcher.Parameters
+import scala.collection.immutable.TreeSet
 
 class BTreeSpec extends org.specs2.Specification with org.specs2.ScalaCheck {
   def is = s2"""
@@ -27,11 +28,53 @@ A B-Tree should
   contain all distinct elements      $containAllDistinctElements
   contain all elements in order      $containsElementsInOrder
 
+A non-empty B-Tree should
+  not contain deleted element        $notContainDeletedElement
+  not contain any elements after all are deleted $deleteAllElements
+
 Counter-examples
   ${example(-1, -2, 2, 3, -3, 5, 6, 7, 1, -4, 8, 4, 9, 0, -5, 10, -6)}
   ${example(2, 3, 1, -1, -2, 4, -5, 5, -6, 6, -7, 0, -3, 7, -4, 8, 9)}
   ${example(-2, -1, 5, 2, -3, 6, 7, 0, 1, -4, -5, -6, -7, 3, -8, -9, 4)}
   ${example(6, 7, -1, 8, -2, 0, 9, 2, 10, 3, -3, 11, -4, -5, 4, 5, 1)}
+
+Delete counter-examples
+  ${delete(0, 1, -1, -2, 2)(0)}
+  ${delete(-1, 0, 1, -2, 2)(-1)}
+  ${delete(-1, -3, -2, 0, 1)(0)}
+  ${delete(-1, 1, -2, 0, 2, 3)(0)}
+  ${delete(0, -1, -2, 1, 3, 2)(3)}
+  ${delete(0, -1, 2, -3, -2, 1)(-3)}
+  ${delete(0, -1, 1, 2, -2, 5, 3, 4)(5)}
+  ${delete(-2, -3, -1, 0, 1, -4, 2)(-1)}
+  ${delete(-1, -2, 2, -3, 0, 1, 3, 4, -4)(0)}
+  ${delete(2, -2, 3, 1, -3, -1, -4, 0)(-4)}
+  ${delete(-2, 0, 4, -3, -8, -9, 1, -10, 5, 6, -4, -5, -6, -7, -1, 2, 3)(0)}
+  ${delete(-5, -6, 2, -7, -2, 3, 0, 1, -8, 4, -1, -3, 5, -9, -10, -4, 6)(1)}
+  ${delete(-2, 0, -3, 2, 3, 4, -1, -4, 5, -5, -6, 1, 6, 7, 8, -7, -8)(0)}
+  ${delete(-6, 0, -7, -3, -8, 1, -9, -4, -5, 3, 4, 5, -10, -11, 2, -1, -2)(1)}
+  ${delete(-2, 2, 0, 3, -1, 1, -3, 4, 5, 9, -4, 10, 11, -5, 6, 7, 8)(0)}
+  ${delete(-1, -2, 4, 1, 2, -5, 8, -6, 3, -7, 0, 5, 6, 9, -3, -4, 7)(0)}
+  ${delete(-2, 2, -3, 0, 6, -4, 3, 7, -1, 8, -10, 9, 10, 4, 11, 1, 5)(-10)}
+  ${delete(-2, 9, -5, 2, 1, 3, -6, 8, -1, 10, 4, 5, -7, 0, -3, 6, -4, 7)(8)}
+  ${delete(-2, -4, -5, -6, 0, 2, 3, 4, -1, 1, 5, -3, -7, -10, 6, -8, 7, -9)(-10)}
+  ${delete(0, 7, 1, 8, 9, 13, 10, 2, -2, 11, 3, 4, -3, -4, 5, 6, -1, 12)(13)}
+  ${delete(6, 7, 8, 4, -2, 0, 5, -5, 2, -3, -4, -6, 3, -7, -8, 1, -9, -1)(0)}
+  ${delete(-3, -2, -4, 0, 6, -1, -5, -6, 2, 3, -7, 1, 4, 5, -8, -9, 7, -10)(0)}
+  ${delete(4, 7, 0, -1, -2, 2, 8, 9, -3, -4, 5, 6, 10, 1, 11, 12, -5, 3)(0)}
+  ${delete(2, -5, 3, -6, -7, 8, 9, 10, 4, -2, -3, -4, 5, -1, 1, 6, 7, 0)(0)}
+  ${delete(2, -2, -5, 1, 3, -10, 4, -1, -6, 5, 6, -7, -3, -8, 0, 7, -4, -9, 8, 9)(0)}
+  ${delete(-1, 2, 7, -2, -3, -7, -8, 3, -9, -10, 5, -11, 6, -4, 0, -5, 4, -12, -6, 1)(0)}
+  ${delete(-2, -5, -6, -7, 1, 2, -3, 3, -8, 7, 8, -4, 9, -1, 0, 4, 6, -9, 5, -10)(0)}
+  ${delete(-1, -6, -7, 1, -8, 0, 2, -9, -2, 3, -10, 4, 5, -11, 6, 7, -3, 8, -4, -5)(0)}
+  ${delete(1, -4, 2, -5, -6, -1, -2, -3, -10, -11, 3, -12, -7, -13, -8, -9, 4, 0, -14, -15)(0)}
+  ${delete(-1, -2, 2, -3, 3, 5, 6, 7, 8, 1, 9, -4, 10, 0, 11, 4, -5, -6, 12, 13)(0)}
+  ${delete(2, 1, 7, -2, -3, -5, -6, 8, 3, 9, -7, -4, 4, 5, 10, 11, 12, 0, -1, 6)(1)}
+  ${delete(-5, 1, 2, -6, -11, -12, -7, -13, -8, -9, -1, -14, -2, 3, 0, -3, -4, -10, -16, -15)(-16)}
+  ${delete(-1, -2, 2, 3, 0, 4, -9, 5, -1425017311, -1425017308, -6, -1425017309, 1, -1425017312, -7, -1425017313, -1425017307, -8, -10, -1425017310, -11, -3, -12, -1425017314, -1425017315, -4, -5, -1425017316, -13)(-1425017307)}
+  ${delete(7, 8, 2, 9, -1, -31871744, 10, -31871738, -31871739, -31871745, -31871740, -31871746, 3, -31871747, -31871735, 11, 1, 4, -31871741, -31871736, -31871737, 5, -31871742, -31871748, 6, 0, 12, -31871743, -31871749)(-31871735)}
+  ${delete(1585351458, 1585351459, -2, 1, -5, -6, 2, 3, -1, -7, -3, 1585351457, 4, -8, 5, 6, -9, -10, 0, -4)(1585351457)}
+  ${delete(-2, -3, 11, 12, -1, 0, 5, 13, -4, -5, -6, -7, 6, 14, -8, 7, 2, 15, -9, 3, 8, 1, 9, 4, -10, 10, 16, -11, -12)(0)}
   """
 
   implicit val params = Parameters(minTestsOk = 1000, minSize = 0, maxSize = 2000)
@@ -64,5 +107,29 @@ Counter-examples
     BTree(elements: _*).toVector must_== elements.toVector.sorted.distinct
   }
 
+  def GenNonEmptyTreeWithElementToDelete[T: Arbitrary: Ordering] = for {
+    elements <- Gen.listOf(arbitrary[T])
+    if elements.nonEmpty
+    toBeDeleted <- Gen.oneOf(elements)
+  } yield (elements, toBeDeleted)
+
+  def notContainDeletedElement = Prop.forAll(GenNonEmptyTreeWithElementToDelete[Int]) {
+    case (elements, toBeDeleted) =>
+      (BTree(elements: _*) - toBeDeleted).contains(toBeDeleted) aka "value still present" must beFalse
+  }
+  def deleteAllElements = Prop.forAll(arbitrary[List[Int]]) { elements =>
+    elements.nonEmpty ==> {
+      val tree = BTree(elements: _*)
+      elements.foldLeft(tree)(_ - _).toVector must_== Vector.empty
+    }
+  }
+
   def example(elts: Int*) = BTree(elts: _*).toVector must_== Vector(elts: _*).distinct.sorted
+
+  def delete(elts: Int*)(valueToDelete: Int) = {
+    val tree = BTree(elts: _*)
+    val actual = tree.-(valueToDelete)
+    val expected = TreeSet(elts: _*).-(valueToDelete).toVector
+    (actual.toVector must_== expected) and (actual.size must_== expected.size)
+  }
 }

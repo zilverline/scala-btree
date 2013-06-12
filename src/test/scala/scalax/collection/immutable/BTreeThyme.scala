@@ -40,4 +40,11 @@ object BTreeThyme {
     val xs = BTreeThyme.shuffled.take(i)
     th.pbenchOff(s"insert $i shuffled values")(BTree(xs: _*).size, ftitle = "btree")(HashSet(xs: _*).size, htitle = "hashset")
   }
+
+  def deleteShuffled(sizes: Seq[Int] = DefaultSizes): Unit = sizes foreach { i =>
+    val xs = BTreeThyme.shuffled.take(i)
+    val btree = BTree(xs: _*)
+    val ts = TreeSet(xs: _*)
+    th.pbenchOff(s"delete $i shuffled values")(xs.foldLeft(btree)(_ - _).isEmpty, ftitle = "btree")(xs.foldLeft(ts)(_ - _).isEmpty, htitle = "treeset")
+  }
 }
