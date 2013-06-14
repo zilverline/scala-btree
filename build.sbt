@@ -2,6 +2,8 @@ name := "btree"
 
 version := "0.1-SNAPSHOT"
 
+organization := "com.zilverline"
+
 description := "Memory efficient In-Memory B-Trees."
 
 scalaVersion := "2.10.2"
