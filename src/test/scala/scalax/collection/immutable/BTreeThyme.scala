@@ -11,6 +11,12 @@ object BTreeThyme {
   lazy val th = new ichi.bench.Thyme()
 
   val DefaultSizes = Vector(1000, 1, 10, 100, 1000, 10000, 100000, 1000000)
+  val DefaultParameters = Vector(
+    BTree.Parameters(6, 5),
+    BTree.Parameters(8, 8),
+    BTree.Parameters(12, 12),
+    BTree.Parameters(14, 12),
+    BTree.Parameters(16, 16))
 
   def containsSequential(sizes: Seq[Int] = DefaultSizes): Unit = sizes foreach { i =>
     val xs = BTreeThyme.values.take(i)
@@ -53,5 +59,21 @@ object BTreeThyme {
     val btree = BTree(xs: _*)
     val ts = TreeSet(xs: _*)
     th.pbenchOff(s"delete $i shuffled values")(xs.foldLeft(btree)(_ - _).isEmpty, ftitle = "btree")(xs.foldLeft(ts)(_ - _).isEmpty, htitle = "treeset")
+  }
+
+  def insertShuffledVaryingOrder(sizes: Seq[Int] = DefaultSizes, parameters: Seq[BTree.Parameters] = DefaultParameters): Unit = for {
+    size <- sizes
+    (p1, p2) <- parameters.zip(parameters.tail)
+  } {
+    val xs = BTreeThyme.shuffled.take(size)
+    th.pbenchOff(s"insert $size shuffled values")(BTree(xs: _*)(implicitly, p1).size, ftitle = s"btree L=${p1.minLeafValues},I=${p1.minInternalValues}")(BTree(xs: _*)(implicitly, p2).size, htitle = s"btree L=${p2.minLeafValues},I=${p2.minInternalValues}")
+  }
+
+  def insertShuffledVaryingOrder2(sizes: Seq[Int] = DefaultSizes, parameters: Seq[BTree.Parameters] = DefaultParameters): Unit = for {
+    size <- sizes
+    p1 <- parameters
+  } {
+    val xs = BTreeThyme.shuffled.take(size)
+    th.pbench(BTree(xs: _*)(implicitly, p1).size, title = s"btree L=${p1.minLeafValues},I=${p1.minInternalValues},N=${size}")
   }
 }

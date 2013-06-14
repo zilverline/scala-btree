@@ -16,7 +16,7 @@ trait BTree[A] {
 object BTree {
   import implementation._
 
-  case class Parameters(minLeafValues: Int = 16, minInternalValues: Int = 8)
+  case class Parameters(minLeafValues: Int = 16, minInternalValues: Int = 16)
 
   val DefaultParameters = Parameters()
 
