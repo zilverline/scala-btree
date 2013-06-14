@@ -80,7 +80,7 @@ Delete counter-examples
   ${delete(-2, -3, 11, 12, -1, 0, 5, 13, -4, -5, -6, -7, 6, 14, -8, 7, 2, 15, -9, 3, 8, 1, 9, 4, -10, 10, 16, -11, -12)(0)}
   """
 
-  implicit val params = Parameters(minTestsOk = 1000, minSize = 0, maxSize = 2000)
+  implicit val params = Parameters(minTestsOk = 10000, minSize = 0, maxSize = 2000, workers = Runtime.getRuntime().availableProcessors())
 
   implicit def GenTree[T: Arbitrary: Ordering]: Arbitrary[BTree[T]] = Arbitrary(for {
     elements <- Gen.listOf(arbitrary[T])
