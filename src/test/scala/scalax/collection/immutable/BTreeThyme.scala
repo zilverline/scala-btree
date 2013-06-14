@@ -8,7 +8,7 @@ object BTreeThyme {
   val values = Vector.tabulate(1000000)(_.asInstanceOf[java.lang.Integer])
   val shuffled = random.shuffle(values)
 
-  lazy val th = new ichi.bench.Thyme(0.1)
+  lazy val th = new ichi.bench.Thyme()
 
   val DefaultSizes = Vector(1000, 1, 10, 100, 1000, 10000, 100000, 1000000)
 
@@ -33,12 +33,19 @@ object BTreeThyme {
 
   def insertShuffled(sizes: Seq[Int] = DefaultSizes): Unit = sizes foreach { i =>
     val xs = BTreeThyme.shuffled.take(i)
-    th.pbenchOff(s"insert $i shuffled values")(BTree(xs: _*).size, ftitle = "btree")(TreeSet(xs: _*).size, htitle = "treeset")
+    th.pbenchOff(s"insert $i shuffled values")(xs.foldLeft(BTree.empty[Int])(_ + _).size, ftitle = "btree")(xs.foldLeft(TreeSet.empty[Int])(_ + _).size, htitle = "treeset")
   }
 
   def insertShuffled2(sizes: Seq[Int] = DefaultSizes): Unit = sizes foreach { i =>
     val xs = BTreeThyme.shuffled.take(i)
     th.pbenchOff(s"insert $i shuffled values")(BTree(xs: _*).size, ftitle = "btree")(HashSet(xs: _*).size, htitle = "hashset")
+  }
+
+  def deleteSequential(sizes: Seq[Int] = DefaultSizes): Unit = sizes foreach { i =>
+    val xs = BTreeThyme.values.take(i)
+    val btree = BTree(xs: _*)
+    val ts = TreeSet(xs: _*)
+    th.pbenchOff(s"delete $i sequential values")(xs.foldLeft(btree)(_ - _).isEmpty, ftitle = "btree")(xs.foldLeft(ts)(_ - _).isEmpty, htitle = "treeset")
   }
 
   def deleteShuffled(sizes: Seq[Int] = DefaultSizes): Unit = sizes foreach { i =>

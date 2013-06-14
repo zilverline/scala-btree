@@ -1,36 +1,36 @@
 package scalax.collection.immutable
 
-import org.scalacheck.Gen
+import org.scalacheck._
 import org.scalacheck.Arbitrary.arbitrary
-import org.scalacheck.Prop
-import org.scalacheck.Arbitrary
 import org.specs2.matcher.Parameters
 import scala.collection.immutable.TreeSet
 
 class BTreeSpec extends org.specs2.Specification with org.specs2.ScalaCheck {
+  implicit val parameters = BTree.Parameters(minLeafValues = 2, minInternalValues = 2)
+
   def is = s2"""
 In-memory B-Tree specification
 
 The empty B-Tree should
-  be empty                           $beEmpty
-  have length 0                      $haveLength0
+  be empty                                           $beEmpty
+  have length 0                                      $haveLength0
 
 Singleton B-Tree should
-  not be empty                       $singletonNotEmpty
-  have size 1                        $singletonSize1
-  contain single element             $singletonContains1
+  not be empty                                       $singletonNotEmpty
+  have size 1                                        $singletonSize1
+  contain single element                             $singletonContains1
 
 Two-element B-Tree should
-  contain both elements in order     $pairContainsElementsInOrder
+  contain both elements in order                     $pairContainsElementsInOrder
 
 A B-Tree should
-  contain all inserted elements      $containsAllInsertedElements
-  contain all distinct elements      $containAllDistinctElements
-  contain all elements in order      $containsElementsInOrder
+  contain all inserted elements                      $containsAllInsertedElements
+  contain all distinct elements                      $containAllDistinctElements
+  contain all elements in order                      $containsElementsInOrder
 
 A non-empty B-Tree should
-  not contain deleted element        $notContainDeletedElement
-  not contain any elements after all are deleted $deleteAllElements
+  not contain deleted element                        $notContainDeletedElement
+  not contain any elements after all are deleted     $deleteAllElements
 
 Counter-examples
   ${example(-1, -2, 2, 3, -3, 5, 6, 7, 1, -4, 8, 4, 9, 0, -5, 10, -6)}
@@ -45,6 +45,7 @@ Delete counter-examples
   ${delete(-1, 1, -2, 0, 2, 3)(0)}
   ${delete(0, -1, -2, 1, 3, 2)(3)}
   ${delete(0, -1, 2, -3, -2, 1)(-3)}
+  ${delete(0, -1, 4, 1, 5, 2, 3, 6)(4)}
   ${delete(0, -1, 1, 2, -2, 5, 3, 4)(5)}
   ${delete(-2, -3, -1, 0, 1, -4, 2)(-1)}
   ${delete(-1, -2, 2, -3, 0, 1, 3, 4, -4)(0)}
@@ -71,6 +72,8 @@ Delete counter-examples
   ${delete(-1, -2, 2, -3, 3, 5, 6, 7, 8, 1, 9, -4, 10, 0, 11, 4, -5, -6, 12, 13)(0)}
   ${delete(2, 1, 7, -2, -3, -5, -6, 8, 3, 9, -7, -4, 4, 5, 10, 11, 12, 0, -1, 6)(1)}
   ${delete(-5, 1, 2, -6, -11, -12, -7, -13, -8, -9, -1, -14, -2, 3, 0, -3, -4, -10, -16, -15)(-16)}
+  ${delete(-2, 2, 0, -3, 3, -6, 4, -7, 1, -8, -4, -9, -1, 5, 6, -5, 7, -10, -11, 8)(0)}
+  ${delete(-2, -3, 4, 5, 6, 7, 8, 2, -4, 9, 0, 10, 11, 12, -5, 3, -1, -6, 1, -7)(1)}
   ${delete(-1, -2, 2, 3, 0, 4, -9, 5, -1425017311, -1425017308, -6, -1425017309, 1, -1425017312, -7, -1425017313, -1425017307, -8, -10, -1425017310, -11, -3, -12, -1425017314, -1425017315, -4, -5, -1425017316, -13)(-1425017307)}
   ${delete(7, 8, 2, 9, -1, -31871744, 10, -31871738, -31871739, -31871745, -31871740, -31871746, 3, -31871747, -31871735, 11, 1, 4, -31871741, -31871736, -31871737, 5, -31871742, -31871748, 6, 0, 12, -31871743, -31871749)(-31871735)}
   ${delete(1585351458, 1585351459, -2, 1, -5, -6, 2, 3, -1, -7, -3, 1585351457, 4, -8, 5, 6, -9, -10, 0, -4)(1585351457)}
@@ -115,7 +118,9 @@ Delete counter-examples
 
   def notContainDeletedElement = Prop.forAll(GenNonEmptyTreeWithElementToDelete[Int]) {
     case (elements, toBeDeleted) =>
-      (BTree(elements: _*) - toBeDeleted).contains(toBeDeleted) aka "value still present" must beFalse
+      val initial = BTree(elements: _*)
+      val deleted = initial - toBeDeleted
+      (deleted.size must_== (initial.size - 1)) and (deleted.contains(toBeDeleted) aka "value still present" must beFalse) and (deleted.toVector must_== TreeSet(elements: _*).-(toBeDeleted).toVector)
   }
   def deleteAllElements = Prop.forAll(arbitrary[List[Int]]) { elements =>
     elements.nonEmpty ==> {
