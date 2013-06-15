@@ -439,75 +439,50 @@ private[immutable] object implementation {
     private def rightChild(node: N, index: Int) = child(node, 1 + valueCount(node) + index)
 
     override def deleteFromRoot(node: N, a: A)(implicit builder: NodeBuilder[Next[L], A]): Option[Either[N, ChildNode]] = {
-      val index = search(node, a)
       val children = valueCount(node)
-      if (index >= 0) {
-        val left = leftChild(node, index)
-        val right = rightChild(node, index)
-        childOps.rebalance(left, right)(builder.asInstanceOf[NodeBuilder[PreviousLevel, A]]) match {
-          case Left(updated) if children == 1 =>
-            Some(Right(updated))
-          case Left(updated) if children > 1 =>
-            Some(Left(replaceMergedChildren(node, index, updated)))
-          case Right((left, middle, right)) =>
-            Some(Left(replaceUpdatedChildren(node, index, left, middle, right)))
-        }
-      } else {
-        val insertionPoint = -index - 1
-        val childIndex = insertionPoint + children
-        val middleChild = child(node, childIndex)
-        val leftSibling = if (childIndex > 1 + children) child(node, childIndex - 1) else null
-        val rightSibling = if (childIndex + 1 < node.length) child(node, childIndex + 1) else null
-        val leftValue = if (insertionPoint > 1) node(insertionPoint - 1) else null
-        val rightValue = if (insertionPoint < 1 + children) node(insertionPoint) else null
-        if (leftSibling == null || (rightSibling != null && childOps.valueCount(leftSibling) < childOps.valueCount(rightSibling))) {
-          childOps.deleteAndMergeRight(middleChild, rightValue.asInstanceOf[A], rightSibling, a)(builder.down) match {
-            case None =>
-              None
-            case Some(Left(merged)) if children == 1 =>
-              Some(Right(merged))
-            case Some(Left(merged)) if children > 1 =>
-              Some(Left(replaceMergedChildren(node, insertionPoint, merged)))
-            case Some(Right((updatedChild, updatedRightValue, updatedRightSibling))) =>
-              Some(Left(replaceUpdatedChildren(node, insertionPoint, updatedChild, updatedRightValue, updatedRightSibling)))
-          }
-        } else {
-          childOps.deleteAndMergeLeft(leftSibling, leftValue.asInstanceOf[A], middleChild, a)(builder.down) match {
-            case None =>
-              None
-            case Some(Left(merged)) if children == 1 =>
-              Some(Right(merged))
-            case Some(Left(merged)) if children > 1 =>
-              Some(Left(replaceMergedChildren(node, insertionPoint - 1, merged)))
-            case Some(Right((updatedLeftSibling, updatedLeftValue, updatedChild))) =>
-              Some(Left(replaceUpdatedChildren(node, insertionPoint - 1, updatedLeftSibling, updatedLeftValue, updatedChild)))
-          }
-        }
+      val (index, result) = deleteValue(node, a)
+      result match {
+        case None =>
+          None
+        case Some(Left(merged)) if children == 1 =>
+          Some(Right(merged))
+        case Some(Left(merged)) if children > 1 =>
+          Some(Left(replaceMergedChildren(node, index, merged)))
+        case Some(Right((left, middle, right))) =>
+          Some(Left(replaceUpdatedChildren(node, index, left, middle, right)))
       }
     }
-    private def replaceMergedChildren(node: N, insertionPoint: Int, merged: Node[L, A])(implicit builder: NodeBuilder[Next[L], A]): N = {
+    def deleteAndMergeLeft(leftSibling: N, leftValue: A, node: N, a: A)(implicit builder: NodeBuilder[Next[L], A]): Option[Either[N, (N, A, N)]] = {
       val children = valueCount(node)
-      val childIndex = insertionPoint + children
-      builder.internal(children - 1)
-      builder.setSize(size(node) - 1)
-      builder.copy(node, 1, insertionPoint)
-      builder.copy(node, insertionPoint + 1, childIndex)
-      builder.insertChild(merged)
-      builder.copy(node, childIndex + 2, node.length)
-      builder.result()
+      val (index, result) = deleteValue(node, a)
+      result match {
+        case None =>
+          None
+        case Some(Left(merged)) if children == minValues && valueCount(leftSibling) == minValues =>
+          Some(Left(replaceMergedChildAndMergeWithLeft(leftSibling, leftValue, node, index, merged)))
+        case Some(Left(merged)) if children > minValues =>
+          Some(Right((leftSibling, leftValue, replaceMergedChildren(node, index, merged))))
+        case Some(Left(merged)) if valueCount(leftSibling) > minValues =>
+          Some(Right(replaceMergedChildAndTakeFromLeft(leftSibling, leftValue, node, index, merged)))
+        case Some(Right((left, middle, right))) =>
+          Some(Right((leftSibling, leftValue, replaceUpdatedChildren(node, index, left, middle, right))))
+      }
     }
-    private def replaceUpdatedChildren(node: N, insertionPoint: Int, left: Node[L, A], middle: A, right: Node[L, A])(implicit builder: NodeBuilder[Next[L], A]): N = {
+    def deleteAndMergeRight(node: N, rightValue: A, rightSibling: N, a: A)(implicit builder: NodeBuilder[Next[L], A]): Option[Either[N, (N, A, N)]] = {
       val children = valueCount(node)
-      val childIndex = insertionPoint + children
-      builder.internal(children)
-      builder.setSize(size(node) - 1)
-      builder.copy(node, 1, insertionPoint)
-      builder.insertValue(middle)
-      builder.copy(node, insertionPoint + 1, childIndex)
-      builder.insertChild(left)
-      builder.insertChild(right)
-      builder.copy(node, childIndex + 2, node.length)
-      builder.result()
+      val (index, result) = deleteValue(node, a)
+      result match {
+        case None =>
+          None
+        case Some(Left(merged)) if children == minValues && valueCount(rightSibling) == minValues =>
+          Some(Left(replaceMergedChildAndMergeWithRight(node, rightValue, rightSibling, index, merged)))
+        case Some(Left(merged)) if children > minValues =>
+          Some(Right((replaceMergedChildren(node, index, merged), rightValue, rightSibling)))
+        case Some(Left(merged)) if valueCount(rightSibling) > minValues =>
+          Some(Right(replaceMergedChildAndTakeFromRight(node, rightValue, rightSibling, index, merged)))
+        case Some(Right((left, middle, right))) =>
+          Some(Right((replaceUpdatedChildren(node, index, left, middle, right), rightValue, rightSibling)))
+      }
     }
     override def rebalance(left: N, right: N)(implicit builder: NodeBuilder[Next[L], A]): Either[N, (N, A, N)] = {
       val leftCount = valueCount(left)
@@ -567,6 +542,49 @@ private[immutable] object implementation {
       }
     }
 
+    private def deleteValue(node: N, a: A)(implicit builder: NodeBuilder[Next[L], A]): (Int, Option[Either[ChildNode, (ChildNode, A, ChildNode)]]) = {
+      val index = search(node, a)
+      if (index >= 0) {
+        (index, Some(childOps.rebalance(leftChild(node, index), rightChild(node, index))(builder.down)))
+      } else {
+        val insertionPoint = -index - 1
+        val children = valueCount(node)
+        val childIndex = insertionPoint + children
+        val middle = child(node, childIndex)
+        val left = if (childIndex > 1 + children) child(node, childIndex - 1) else null
+        val right = if (childIndex + 1 < node.length) child(node, childIndex + 1) else null
+        if (left == null || (right != null && childOps.valueCount(left) < childOps.valueCount(right))) {
+          (insertionPoint, childOps.deleteAndMergeRight(middle, node(insertionPoint).asInstanceOf[A], right, a)(builder.down))
+        } else {
+          (insertionPoint - 1, childOps.deleteAndMergeLeft(left, node(insertionPoint - 1).asInstanceOf[A], middle, a)(builder.down))
+        }
+      }
+    }
+
+    private def replaceMergedChildren(node: N, insertionPoint: Int, merged: Node[L, A])(implicit builder: NodeBuilder[Next[L], A]): N = {
+      val children = valueCount(node)
+      val childIndex = insertionPoint + children
+      builder.internal(children - 1)
+      builder.setSize(size(node) - 1)
+      builder.copy(node, 1, insertionPoint)
+      builder.copy(node, insertionPoint + 1, childIndex)
+      builder.insertChild(merged)
+      builder.copy(node, childIndex + 2, node.length)
+      builder.result()
+    }
+    private def replaceUpdatedChildren(node: N, insertionPoint: Int, left: Node[L, A], middle: A, right: Node[L, A])(implicit builder: NodeBuilder[Next[L], A]): N = {
+      val children = valueCount(node)
+      val childIndex = insertionPoint + children
+      builder.internal(children)
+      builder.setSize(size(node) - 1)
+      builder.copy(node, 1, insertionPoint)
+      builder.insertValue(middle)
+      builder.copy(node, insertionPoint + 1, childIndex)
+      builder.insertChild(left)
+      builder.insertChild(right)
+      builder.copy(node, childIndex + 2, node.length)
+      builder.result()
+    }
     private def replaceMergedChildAndMergeWithLeft(leftSibling: N, leftValue: A, node: N, index: Int, merged: Node[L, A])(implicit builder: NodeBuilder[Next[L], A]): N = {
       val children = valueCount(node)
       val childIndex = index + children
@@ -640,115 +658,6 @@ private[immutable] object implementation {
       builder.recalculateSize()
       val updatedRight = builder.result()
       (updatedLeft, updatedMiddle, updatedRight)
-    }
-
-    def deleteAndMergeLeft(leftSibling: N, leftValue: A, node: N, a: A)(implicit builder: NodeBuilder[Next[L], A]): Option[Either[N, (N, A, N)]] = {
-      val index = search(node, a)
-      val children = valueCount(node)
-      if (index >= 0) {
-        val childIndex = index + children
-        val left = leftChild(node, index)
-        val right = rightChild(node, index)
-        childOps.rebalance(left, right)(builder.down) match {
-          case Left(merged) if children == minValues && valueCount(leftSibling) == minValues =>
-            Some(Left(replaceMergedChildAndMergeWithLeft(leftSibling, leftValue, node, index, merged)))
-          case Left(merged) if children > minValues =>
-            Some(Right((leftSibling, leftValue, replaceMergedChildren(node, index, merged))))
-          case Left(merged) if valueCount(leftSibling) > minValues =>
-            Some(Right(replaceMergedChildAndTakeFromLeft(leftSibling, leftValue, node, index, merged)))
-          case Right((l, m, r)) =>
-            Some(Right((leftSibling, leftValue, replaceUpdatedChildren(node, index, l, m, r))))
-        }
-      } else {
-        val insertionPoint = -index - 1
-        val childIndex = insertionPoint + children
-        val middleChild = child(node, childIndex)
-        val childLeftSibling = if (childIndex > 1 + children) child(node, childIndex - 1) else null
-        val childRightSibling = if (childIndex + 1 < node.length) child(node, childIndex + 1) else null
-        val childLeftValue = if (insertionPoint > 1) node(insertionPoint - 1) else null
-        val childRightValue = if (insertionPoint < 1 + children) node(insertionPoint) else null
-        if (childLeftSibling == null || (childRightSibling != null && childOps.valueCount(childLeftSibling) < childOps.valueCount(childRightSibling))) {
-          childOps.deleteAndMergeRight(middleChild, childRightValue.asInstanceOf[A], childRightSibling, a)(builder.down) match {
-            case None =>
-              None
-            case Some(Left(merged)) if children == minValues && valueCount(leftSibling) == minValues =>
-              Some(Left(replaceMergedChildAndMergeWithLeft(leftSibling, leftValue, node, insertionPoint, merged)))
-            case Some(Left(merged)) if children > minValues =>
-              Some(Right((leftSibling, leftValue, replaceMergedChildren(node, insertionPoint, merged))))
-            case Some(Left(merged)) if valueCount(leftSibling) > minValues =>
-              Some(Right(replaceMergedChildAndTakeFromLeft(leftSibling, leftValue, node, insertionPoint, merged)))
-            case Some(Right((l, m, r))) =>
-              Some(Right((leftSibling, leftValue, replaceUpdatedChildren(node, insertionPoint, l, m, r))))
-          }
-        } else {
-          childOps.deleteAndMergeLeft(childLeftSibling, childLeftValue.asInstanceOf[A], middleChild, a)(builder.down) match {
-            case None =>
-              None
-            case Some(Left(merged)) if children == minValues && valueCount(leftSibling) == minValues =>
-              Some(Left(replaceMergedChildAndMergeWithLeft(leftSibling, leftValue, node, insertionPoint - 1, merged)))
-            case Some(Left(merged)) if children > minValues =>
-              Some(Right((leftSibling, leftValue, replaceMergedChildren(node, insertionPoint - 1, merged))))
-            case Some(Left(merged)) if valueCount(leftSibling) > minValues =>
-              Some(Right(replaceMergedChildAndTakeFromLeft(leftSibling, leftValue, node, insertionPoint - 1, merged)))
-            case Some(Right((l, m, r))) =>
-              Some(Right((leftSibling, leftValue, replaceUpdatedChildren(node, insertionPoint - 1, l, m, r))))
-          }
-        }
-      }
-    }
-    def deleteAndMergeRight(node: N, rightValue: A, rightSibling: N, a: A)(implicit builder: NodeBuilder[Next[L], A]): Option[Either[N, (N, A, N)]] = {
-      val index = search(node, a)
-      val children = valueCount(node)
-      if (index >= 0) {
-        val childIndex = index + children
-        val left = leftChild(node, index)
-        val right = rightChild(node, index)
-        childOps.rebalance(left, right)(builder.down) match {
-          case Left(merged) if children == minValues && valueCount(rightSibling) == minValues =>
-            Some(Left(replaceMergedChildAndMergeWithRight(node, rightValue, rightSibling, index, merged)))
-          case Left(merged) if children > minValues =>
-            Some(Right((replaceMergedChildren(node, index, merged), rightValue, rightSibling)))
-          case Left(merged) if valueCount(rightSibling) > minValues =>
-            Some(Right(replaceMergedChildAndTakeFromRight(node, rightValue, rightSibling, index, merged)))
-          case Right((l, m, r)) =>
-            Some(Right((replaceUpdatedChildren(node, index, l, m, r), rightValue, rightSibling)))
-        }
-      } else {
-        val insertionPoint = -index - 1
-        val childIndex = insertionPoint + children
-        val middleChild = child(node, childIndex)
-        val childLeftSibling = if (childIndex > 1 + children) child(node, childIndex - 1) else null
-        val childRightSibling = if (childIndex + 1 < node.length) child(node, childIndex + 1) else null
-        val childLeftValue = if (insertionPoint > 1) node(insertionPoint - 1) else null
-        val childRightValue = if (insertionPoint < 1 + children) node(insertionPoint) else null
-        if (childLeftSibling == null || (childRightSibling != null && childOps.valueCount(childLeftSibling) < childOps.valueCount(childRightSibling))) {
-          childOps.deleteAndMergeRight(middleChild, childRightValue.asInstanceOf[A], childRightSibling, a)(builder.down) match {
-            case None =>
-              None
-            case Some(Left(merged)) if children == minValues && valueCount(rightSibling) == minValues =>
-              Some(Left(replaceMergedChildAndMergeWithRight(node, rightValue, rightSibling, insertionPoint, merged)))
-            case Some(Left(merged)) if children > minValues =>
-              Some(Right((replaceMergedChildren(node, insertionPoint, merged), rightValue, rightSibling)))
-            case Some(Left(merged)) if valueCount(rightSibling) > minValues =>
-              Some(Right(replaceMergedChildAndTakeFromRight(node, rightValue, rightSibling, insertionPoint, merged)))
-            case Some(Right((l, m, r))) =>
-              Some(Right((replaceUpdatedChildren(node, insertionPoint, l, m, r), rightValue, rightSibling)))
-          }
-        } else {
-          childOps.deleteAndMergeLeft(childLeftSibling, childLeftValue.asInstanceOf[A], middleChild, a)(builder.down) match {
-            case None =>
-              None
-            case Some(Left(merged)) if children == minValues && valueCount(rightSibling) == minValues =>
-              Some(Left(replaceMergedChildAndMergeWithRight(node, rightValue, rightSibling, insertionPoint - 1, merged)))
-            case Some(Left(merged)) if children > minValues =>
-              Some(Right((replaceMergedChildren(node, insertionPoint - 1, merged), rightValue, rightSibling)))
-            case Some(Left(merged)) if valueCount(rightSibling) > minValues =>
-              Some(Right(replaceMergedChildAndTakeFromRight(node, rightValue, rightSibling, insertionPoint - 1, merged)))
-            case Some(Right((l, m, r))) =>
-              Some(Right((replaceUpdatedChildren(node, insertionPoint - 1, l, m, r), rightValue, rightSibling)))
-          }
-        }
-      }
     }
 
     override def buildCollection(builder: Builder[A, _], node: N): Unit = {
