@@ -27,6 +27,7 @@ A B-Tree should
   contain all inserted elements                      $containsAllInsertedElements
   contain all distinct elements                      $containAllDistinctElements
   contain all elements in order                      $containsElementsInOrder
+  iterate all elements in order                      $iterateElementsInOrder
 
 A non-empty B-Tree should
   not contain deleted element                        $notContainDeletedElement
@@ -80,7 +81,7 @@ Delete counter-examples
   ${delete(-2, -3, 11, 12, -1, 0, 5, 13, -4, -5, -6, -7, 6, 14, -8, 7, 2, 15, -9, 3, 8, 1, 9, 4, -10, 10, 16, -11, -12)(0)}
   """
 
-  implicit val params = Parameters(minTestsOk = 10000, minSize = 0, maxSize = 2000, workers = Runtime.getRuntime().availableProcessors())
+  implicit val params = Parameters(minTestsOk = 1000, minSize = 0, maxSize = 2000, workers = Runtime.getRuntime().availableProcessors())
 
   implicit def GenTree[T: Arbitrary: Ordering]: Arbitrary[BTree[T]] = Arbitrary(for {
     elements <- Gen.listOf(arbitrary[T])
@@ -94,8 +95,8 @@ Delete counter-examples
   def haveLength0 = empty.size must_== 0
 
   def singletonNotEmpty = singleton.nonEmpty must beTrue
-  def singletonSize1 = singleton.size must_== 1
-  def singletonContains1 = singleton.contains(1) must beTrue
+  def singletonSize1 = singleton must have size(1)
+  def singletonContains1 = singleton must contain(1)
 
   def pairContainsElementsInOrder = pair.toVector must beEqualTo(Vector(1, 2))
 
@@ -104,10 +105,13 @@ Delete counter-examples
     elements.forall(tree.contains)
   }
   def containAllDistinctElements = Prop.forAll(arbitrary[List[Int]]) { elements =>
-    BTree(elements: _*).size must_== elements.toVector.distinct.size
+    BTree(elements: _*) must have size(elements.distinct.size)
   }
   def containsElementsInOrder = Prop.forAll(arbitrary[List[Int]]) { elements =>
-    BTree(elements: _*).toVector must_== elements.toVector.sorted.distinct
+    BTree(elements: _*).toVector must (beSorted[Int] and containTheSameElementsAs(elements.distinct))
+  }
+  def iterateElementsInOrder = Prop.forAll(arbitrary[List[Int]]) { elements =>
+    BTree(elements: _*).iterator.toVector must (beSorted[Int] and containTheSameElementsAs(elements.distinct))
   }
 
   def GenNonEmptyTreeWithElementToDelete[T: Arbitrary: Ordering] = for {
@@ -132,9 +136,8 @@ Delete counter-examples
   def example(elts: Int*) = BTree(elts: _*).toVector must_== Vector(elts: _*).distinct.sorted
 
   def delete(elts: Int*)(valueToDelete: Int) = {
-    val tree = BTree(elts: _*)
-    val actual = tree.-(valueToDelete)
+    val actual = BTree(elts: _*).-(valueToDelete).toVector
     val expected = TreeSet(elts: _*).-(valueToDelete).toVector
-    (actual.toVector must_== expected) and (actual.size must_== expected.size)
+    actual must (beSorted[Int] and containTheSameElementsAs(expected))
   }
 }
