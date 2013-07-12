@@ -103,7 +103,7 @@ private[immutable] object implementation {
       var size = children
       var i = 1 + children
       while (i < node.length) {
-        size += ops.childOps.size(ops.child(node, i))
+        size += ops.childOps.size(ops.childAt(node, i))
         i += 1
       }
       node(0) = size.asInstanceOf[AnyRef]
@@ -134,7 +134,6 @@ private[immutable] object implementation {
     def level: Int
     def parameters: BTree.Parameters
     def ordering: Ordering[A]
-    def isLeaf: Boolean
 
     def newBuilder = new NodeBuilder[L, A]
 
@@ -142,9 +141,9 @@ private[immutable] object implementation {
 
     def childOps: ChildOps
 
-    def value(node: N, index: Int): A
+    def valueAt(node: N, index: Int): A
 
-    def child(node: N, index: Int): ChildNode
+    def childAt(node: N, index: Int): ChildNode
     def leftChild(node: N, index: Int): ChildNode
     def rightChild(node: N, index: Int): ChildNode
 
@@ -174,17 +173,16 @@ private[immutable] object implementation {
     override type PreviousLevel = Nothing
 
     override def level = 0
-    override def isLeaf = true
 
     def childOps: ChildOps = throw new RuntimeException("no child ops for leaf node")
-    def child(node: N, index: Int): ChildNode = throw new RuntimeException("no child for leaf node")
+    def childAt(node: N, index: Int): ChildNode = throw new RuntimeException("no child for leaf node")
     def leftChild(node: N, index: Int): ChildNode = throw new RuntimeException("no child for leaf node")
     def rightChild(node: N, index: Int): ChildNode = throw new RuntimeException("no child for leaf node")
 
     val minValues = parameters.minLeafValues
     val maxValues = minValues * 2
 
-    override def value(node: N, index: Int): A = node(index).asInstanceOf[A]
+    override def valueAt(node: N, index: Int): A = node(index).asInstanceOf[A]
 
     override def valueCount(node: N): Int = node.length
     override def size(node: N): Int = valueCount(node)
@@ -201,20 +199,20 @@ private[immutable] object implementation {
           Left(valueInserted(node, 0, node.length, insertionPoint, a))
         } else {
           Right(if (insertionPoint < minValues) {
-            val left = valueInserted(node, 0, minValues - 1, insertionPoint, a)
-            val middle = value(node, minValues - 1)
-            val right = copied(node, minValues, maxValues)
-            (left, middle, right)
+            val l: N = valueInserted(node, 0, minValues - 1, insertionPoint, a)
+            val m: A = valueAt(node, minValues - 1)
+            val r: N = copied(node, minValues, maxValues)
+            (l, m, r)
           } else if (insertionPoint > minValues) {
-            val left = copied(node, 0, minValues)
-            val middle = value(node, minValues)
-            val right = valueInserted(node, minValues + 1, maxValues, insertionPoint, a)
-            (left, middle, right)
+            val l: N = copied(node, 0, minValues)
+            val m: A = valueAt(node, minValues)
+            val r: N = valueInserted(node, minValues + 1, maxValues, insertionPoint, a)
+            (l, m, r)
           } else {
-            val left = copied(node, 0, minValues)
-            val middle = a
-            val right = copied(node, minValues, maxValues)
-            (left, middle, right)
+            val l: N = copied(node, 0, minValues)
+            val m: A = a
+            val r: N = copied(node, minValues, maxValues)
+            (l, m, r)
           })
         }
       }
@@ -226,17 +224,18 @@ private[immutable] object implementation {
       else Some(Left(valueDeleted(node, index)))
     }
 
-    override def rebalance(left: N, right: N)(implicit builder: NodeBuilder[Leaf, A]): Either[N, (N, A, N)] =
+    override def rebalance(left: N, right: N)(implicit builder: NodeBuilder[Leaf, A]): Either[N, (N, A, N)] = {
       if (left.length == minValues && right.length == minValues)
         Left(builder.leaf(left.length + right.length).copy(left).copy(right).result())
       else
         Right(
           if (left.length > right.length)
-            (valueDeleted(left, left.length - 1), value(left, left.length - 1), right)
+            (valueDeleted(left, left.length - 1), valueAt(left, left.length - 1), right)
           else
-            (left, value(right, 0), valueDeleted(right, 0)))
+            (left, valueAt(right, 0), valueDeleted(right, 0)))
+    }
 
-    def deleteAndMergeLeft(leftSibling: N, leftValue: A, node: N, a: A)(implicit builder: NodeBuilder[Leaf, A]): Option[Either[N, (N, A, N)]] = {
+    override def deleteAndMergeLeft(leftSibling: N, leftValue: A, node: N, a: A)(implicit builder: NodeBuilder[Leaf, A]): Option[Either[N, (N, A, N)]] = {
       val index = search(node, a)
       if (index < 0)
         None
@@ -244,7 +243,7 @@ private[immutable] object implementation {
         Some(Right((leftSibling, leftValue, valueDeleted(node, index))))
       } else if (valueCount(leftSibling) > minValues) {
         val left = valueDeleted(leftSibling, leftSibling.length - 1)
-        val middle = value(leftSibling, leftSibling.length - 1)
+        val middle = valueAt(leftSibling, leftSibling.length - 1)
         val right = builder.leaf(node.length).insertValue(leftValue).copyDeleted(node, index).result()
         Some(Right((left, middle, right)))
       } else {
@@ -254,7 +253,8 @@ private[immutable] object implementation {
           .copyDeleted(node, index).result()))
       }
     }
-    def deleteAndMergeRight(node: N, rightValue: A, rightSibling: N, a: A)(implicit builder: NodeBuilder[Leaf, A]): Option[Either[N, (N, A, N)]] = {
+
+    override def deleteAndMergeRight(node: N, rightValue: A, rightSibling: N, a: A)(implicit builder: NodeBuilder[Leaf, A]): Option[Either[N, (N, A, N)]] = {
       val index = search(node, a)
       if (index < 0)
         None
@@ -262,7 +262,7 @@ private[immutable] object implementation {
         Some(Right((valueDeleted(node, index), rightValue, rightSibling)))
       } else if (valueCount(rightSibling) > minValues) {
         val left = builder.leaf(node.length).copyDeleted(node, index).insertValue(rightValue).result()
-        val middle = value(rightSibling, 0)
+        val middle = valueAt(rightSibling, 0)
         val right = valueDeleted(rightSibling, 0)
         Some(Right((left, middle, right)))
       } else {
@@ -308,7 +308,6 @@ private[immutable] object implementation {
     override type ChildNode = childOps.N
     override type PreviousLevel = L
     override val level = childOps.level + 1
-    override def isLeaf = false
 
     override def valueCount(node: N): Int = (node.length - 2) / 2
     override def size(node: N): Int = node(0).asInstanceOf[Int]
@@ -320,12 +319,10 @@ private[immutable] object implementation {
         val children = valueCount(node)
         val insertionPoint = -index - 1
         val childIndex = insertionPoint + children
-        val child = node(childIndex).asInstanceOf[childOps.N]
+        val child = childAt(node, childIndex)
         childOps.contains(child, a)
       }
     }
-
-    private def search(node: N, a: A): Int = Arrays.binarySearch(node, 1, valueCount(node) + 1, a.asInstanceOf[AnyRef], valueComparator[A])
 
     override def insert(node: N, a: A)(implicit builder: NodeBuilder[Next[L], A]): Either[N, (N, A, N)] = {
       val index = search(node, a)
@@ -335,7 +332,7 @@ private[immutable] object implementation {
         val children = valueCount(node)
         val insertionPoint = -index - 1
         val childIndex = insertionPoint + children
-        val child = node(childIndex).asInstanceOf[childOps.N]
+        val child = childAt(node, childIndex)
         childOps.insert(child, a)(builder.down) match {
           case Left(updatedChild) =>
             builder.allocCopy(node)
@@ -343,91 +340,69 @@ private[immutable] object implementation {
             val sizeChange = childOps.size(updatedChild) - childOps.size(child)
             builder.setSize(size(node) + sizeChange)
             Left(builder.result())
+          case Right((left, middle, right)) if children < maxValues =>
+            Left(valueInserted(node, 0, children, insertionPoint, left, middle, right))
           case Right((left, middle, right)) =>
-            if (children < maxValues) {
-              builder.internal(children + 1)
-              builder.setSize(size(node) + 1)
-              builder.copy(node, 1, insertionPoint)
-              builder.insertValue(middle)
-              builder.copy(node, insertionPoint, childIndex)
-              builder.insertChild(left)
-              builder.insertChild(right)
-              builder.copy(node, childIndex + 1, node.length)
-              Left(builder.result())
-            } else {
-              Right(if (insertionPoint < minValues + 1) {
-                val l: N = {
-                  builder.internal(minValues)
-                  builder.copy(node, 1, insertionPoint)
-                  builder.insertValue(middle)
-                  builder.copy(node, insertionPoint, 1 + minValues - 1)
-                  builder.copy(node, 1 + children, childIndex)
-                  builder.insertChild(left)
-                  builder.insertChild(right)
-                  builder.copy(node, childIndex + 1, 1 + maxValues + minValues)
-                  builder.recalculateSize()
-                  builder.result()
-                }
-                val m: A = node(minValues).asInstanceOf[A]
-                val r: N = {
-                  builder.internal(minValues)
-                  builder.copy(node, 1 + minValues, 1 + children)
-                  builder.copy(node, 1 + children + minValues, node.length)
-                  builder.recalculateSize()
-                  builder.result()
-                }
-                (l, m, r)
-              } else if (insertionPoint > minValues + 1) {
-                val l: N = {
-                  builder.internal(minValues)
-                  builder.copy(node, 1, 1 + minValues)
-                  builder.copy(node, 1 + children, 1 + children + minValues + 1)
-                  builder.recalculateSize()
-                  builder.result()
-                }
-                val m: A = node(minValues + 1).asInstanceOf[A]
-                val r: N = {
-                  builder.internal(minValues)
-                  builder.copy(node, 1 + minValues + 1, insertionPoint)
-                  builder.insertValue(middle)
-                  builder.copy(node, insertionPoint, 1 + children)
-                  builder.copy(node, 1 + children + minValues + 1, childIndex)
-                  builder.insertChild(left)
-                  builder.insertChild(right)
-                  builder.copy(node, childIndex + 1, node.length)
-                  builder.recalculateSize()
-                  builder.result()
-                }
-                (l, m, r)
-              } else {
-                val l: N = {
-                  builder.internal(minValues)
-                  builder.copy(node, 1, 1 + minValues)
-                  builder.copy(node, 1 + maxValues, 1 + maxValues + minValues)
-                  builder.insertChild(left)
-                  builder.recalculateSize()
-                  builder.result()
-                }
-                val m: A = middle
-                val r: N = {
-                  builder.internal(minValues)
-                  builder.copy(node, 1 + minValues, 1 + maxValues)
-                  builder.insertChild(right)
-                  builder.copy(node, 1 + maxValues + minValues + 1, node.length)
-                  builder.recalculateSize()
-                  builder.result()
-                }
-                (l, m, r)
-              })
-            }
+            Right(split(node, insertionPoint, left, middle, right))
         }
       }
     }
 
-    override def value(node: N, index: Int): A = node(index + 1).asInstanceOf[A]
-    override def child(node: N, index: Int): ChildNode = node(index).asInstanceOf[ChildNode]
-    override def leftChild(node: N, index: Int): ChildNode = child(node, 1 + valueCount(node) + index - 1)
-    override def rightChild(node: N, index: Int): ChildNode = child(node, 1 + valueCount(node) + index)
+    private def split(node: N, insertionPoint: Int, left: ChildNode, middle: A, right: ChildNode)(implicit builder: NodeBuilder[Next[L], A]): (N, A, N) = {
+      val children = valueCount(node)
+      if (insertionPoint < minValues + 1) {
+        val l: N = valueInserted(node, 0, minValues - 1, insertionPoint, left, middle, right)
+        val m: A = valueAt(node, minValues)
+        val r: N = copied(node, minValues, children)
+        (l, m, r)
+      } else if (insertionPoint > minValues + 1) {
+        val l: N = copied(node, 0, minValues)
+        val m: A = valueAt(node, minValues + 1)
+        val r: N = valueInserted(node, minValues + 1, children, insertionPoint, left, middle, right)
+        (l, m, r)
+      } else {
+        val l: N = childUpdated(node, 0, minValues, minValues, left)
+        val m: A = middle
+        val r: N = childUpdated(node, minValues, children, 0, right)
+        (l, m, r)
+      }
+    }
+
+    private def valueInserted(node: N, from: Int, to: Int, insertionPoint: Int, left: ChildNode, middle: A, right: ChildNode)(implicit builder: NodeBuilder[Next[L], A]): N = {
+      val children = valueCount(node)
+      val childIndex = insertionPoint + children
+      builder.internal(to - from + 1)
+      builder.copy(node, 1 + from, insertionPoint)
+      builder.insertValue(middle)
+      builder.copy(node, insertionPoint, 1 + to)
+      builder.copy(node, 1 + from + children, childIndex)
+      builder.insertChild(left)
+      builder.insertChild(right)
+      builder.copy(node, childIndex + 1, 1 + to + children + 1)
+      builder.recalculateSize().result()
+    }
+
+    private def copied(node: N, from: Int, to: Int)(implicit builder: NodeBuilder[Next[L], A]): N = {
+      val children = valueCount(node)
+      builder.internal(to - from)
+      builder.copy(node, 1 + from, 1 + to)
+      builder.copy(node, 1 + from + children, 1 + to + children + 1)
+      builder.recalculateSize().result()
+    }
+
+    private def childUpdated(node: N, from: Int, to: Int, childIndex: Int, child: ChildNode)(implicit builder: NodeBuilder[Next[L], A]): N = {
+      val children = valueCount(node)
+      builder.internal(to - from)
+      builder.copy(node, 1 + from, 1 + to)
+      builder.copy(node, 1 + from + children, 1 + to + children + 1)
+      builder.updateChild(1 + to - from + childIndex, child)
+      builder.recalculateSize().result()
+    }
+
+    override def valueAt(node: N, index: Int): A = node(index).asInstanceOf[A]
+    override def childAt(node: N, index: Int): ChildNode = node(index).asInstanceOf[ChildNode]
+    override def leftChild(node: N, index: Int): ChildNode = childAt(node, 1 + valueCount(node) + index - 1)
+    override def rightChild(node: N, index: Int): ChildNode = childAt(node, 1 + valueCount(node) + index)
 
     override def deleteFromRoot(node: N, a: A)(implicit builder: NodeBuilder[Next[L], A]): Option[Either[N, ChildNode]] = {
       val children = valueCount(node)
@@ -478,21 +453,19 @@ private[immutable] object implementation {
     override def rebalance(left: N, right: N)(implicit builder: NodeBuilder[Next[L], A]): Either[N, (N, A, N)] = {
       val leftCount = valueCount(left)
       val rightCount = valueCount(right)
-      val highestLeftChild = left(1 + leftCount + leftCount).asInstanceOf[ChildNode]
-      val lowestRightChild = right(1 + rightCount).asInstanceOf[ChildNode]
+      val highestLeftChild = childAt(left, 1 + leftCount + leftCount)
+      val lowestRightChild = childAt(right, 1 + rightCount)
       childOps.rebalance(highestLeftChild, lowestRightChild)(builder.down) match {
         case Right((l, m, r)) =>
           builder.internal(leftCount)
           builder.copy(left, 1, left.length - 1)
           builder.insertChild(l)
-          builder.recalculateSize()
-          val updatedLeft = builder.result()
+          val updatedLeft = builder.recalculateSize().result()
           builder.internal(rightCount)
           builder.copy(right, 1, 1 + rightCount)
           builder.insertChild(r)
           builder.copy(right, 1 + rightCount + 1, right.length)
-          builder.recalculateSize()
-          val updatedRight = builder.result()
+          val updatedRight = builder.recalculateSize().result()
           Right((updatedLeft, m, updatedRight))
         case Left(merged) if leftCount == minValues && rightCount == minValues =>
           builder.internal(maxValues)
@@ -507,31 +480,30 @@ private[immutable] object implementation {
           builder.internal(leftCount - 1)
           builder.copy(left, 1, 1 + leftCount - 1)
           builder.copy(left, 1 + leftCount, left.length - 1)
-          builder.recalculateSize()
-          val updatedLeft = builder.result()
-          val middle = left(leftCount).asInstanceOf[A]
+          val updatedLeft = builder.recalculateSize().result()
+          val middle = valueAt(left, leftCount)
           builder.internal(rightCount)
           builder.copy(right, 1, 1 + rightCount)
           builder.insertChild(merged)
           builder.copy(right, 1 + rightCount + 1, right.length)
-          builder.recalculateSize()
-          val updatedRight = builder.result()
+          val updatedRight = builder.recalculateSize().result()
           Right((updatedLeft, middle, updatedRight))
         case Left(merged) =>
           builder.internal(leftCount)
           builder.copy(left, 1, left.length - 1)
           builder.insertChild(merged)
-          builder.recalculateSize()
-          val updatedLeft = builder.result()
-          val middle = right(1).asInstanceOf[A]
+          val updatedLeft = builder.recalculateSize().result()
+          val middle = valueAt(right, 1)
           builder.internal(rightCount - 1)
           builder.copy(right, 2, 1 + rightCount)
           builder.copy(right, 1 + rightCount + 1, right.length)
-          builder.recalculateSize()
-          val updatedRight = builder.result()
+          val updatedRight = builder.recalculateSize().result()
           Right((updatedLeft, middle, updatedRight))
       }
     }
+
+    override def pathToHead(node: N, parent: PathNode[A]): PathNode[A] =
+      childOps.pathToHead(leftChild(node, 1), new PathInternalNode(node, parent))
 
     private def deleteValue(node: N, a: A)(implicit builder: NodeBuilder[Next[L], A]): (Int, Option[Either[ChildNode, (ChildNode, A, ChildNode)]]) = {
       val index = search(node, a)
@@ -541,13 +513,13 @@ private[immutable] object implementation {
         val insertionPoint = -index - 1
         val children = valueCount(node)
         val childIndex = insertionPoint + children
-        val middle = child(node, childIndex)
-        val left = if (childIndex > 1 + children) child(node, childIndex - 1) else null
-        val right = if (childIndex + 1 < node.length) child(node, childIndex + 1) else null
+        val middle = childAt(node, childIndex)
+        val left = if (childIndex > 1 + children) childAt(node, childIndex - 1) else null
+        val right = if (childIndex + 1 < node.length) childAt(node, childIndex + 1) else null
         if (left == null || (right != null && childOps.valueCount(left) < childOps.valueCount(right))) {
-          (insertionPoint, childOps.deleteAndMergeRight(middle, node(insertionPoint).asInstanceOf[A], right, a)(builder.down))
+          (insertionPoint, childOps.deleteAndMergeRight(middle, valueAt(node, insertionPoint), right, a)(builder.down))
         } else {
-          (insertionPoint - 1, childOps.deleteAndMergeLeft(left, node(insertionPoint - 1).asInstanceOf[A], middle, a)(builder.down))
+          (insertionPoint - 1, childOps.deleteAndMergeLeft(left, valueAt(node, insertionPoint - 1), middle, a)(builder.down))
         }
       }
     }
@@ -613,7 +585,7 @@ private[immutable] object implementation {
       builder.copy(leftSibling, 1 + leftCount, leftSibling.length - 1)
       builder.recalculateSize()
       val updatedLeft = builder.result()
-      val updatedMiddle = leftSibling(leftCount).asInstanceOf[A]
+      val updatedMiddle = valueAt(leftSibling, leftCount)
       val children = valueCount(node)
       val childIndex = index + children
       builder.internal(children)
@@ -641,7 +613,7 @@ private[immutable] object implementation {
       builder.insertChild(leftChild(rightSibling, 1))
       builder.recalculateSize()
       val updatedLeft = builder.result()
-      val updatedMiddle = rightSibling(1).asInstanceOf[A]
+      val updatedMiddle = valueAt(rightSibling, 1)
       val rightCount = valueCount(rightSibling)
       builder.internal(rightCount - 1)
       builder.copy(rightSibling, 2, 1 + rightCount)
@@ -651,10 +623,7 @@ private[immutable] object implementation {
       (updatedLeft, updatedMiddle, updatedRight)
     }
 
-    override def pathToHead(node: N, parent: PathNode[A]): PathNode[A] = {
-      val leftMostChild = leftChild(node, 1)
-      childOps.pathToHead(leftMostChild, new PathInternalNode(node, parent))
-    }
+    private def search(node: N, a: A): Int = Arrays.binarySearch(node, 1, valueCount(node) + 1, a.asInstanceOf[AnyRef], valueComparator[A])
   }
 
   class Root[L <: Level, A](val root: Node[L, A])(implicit override val ordering: Ordering[A], val ops: NodeOps[L, A])
@@ -698,7 +667,7 @@ private[immutable] object implementation {
     private[this] var position: Int = 0
     private[this] val valueCount = ops.valueCount(node)
 
-    def current: A = ops.value(node, position)
+    def current: A = ops.valueAt(node, position)
     def next: PathNode[A] =
       if (position + 1 < valueCount) {
         position += 1
@@ -715,12 +684,12 @@ private[immutable] object implementation {
     private[this] val valueCount = ops.valueCount(node)
     private[this] val valueAndChildCount = 2 * valueCount + 1
 
-    def current: A = ops.value(node, (position - 1) / 2)
+    def current: A = ops.valueAt(node, 1 + (position - 1) / 2)
     def next: PathNode[A] =
       if (position + 1 < valueAndChildCount) {
         position += 1
         if (position % 2 == 0)
-          ops.childOps.pathToHead(ops.child(node, 1 + valueCount + position / 2), this)
+          ops.childOps.pathToHead(ops.childAt(node, 1 + valueCount + position / 2), this)
         else
           this
       } else {

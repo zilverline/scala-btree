@@ -34,7 +34,7 @@ object BTreeThyme {
 
   def insertSequential(sizes: Seq[Int] = DefaultSizes): Unit = sizes foreach { i =>
     val xs = BTreeThyme.values.take(i)
-    th.pbenchOff(s"insert $i sequential values")(BTree(xs: _*).size, ftitle = "btree")(TreeSet(xs: _*).size, htitle = "treeset")
+    th.pbenchOff(s"insert $i sequential values")(xs.foldLeft(BTree.empty[Int])(_ + _).size, ftitle = "btree")(xs.foldLeft(TreeSet.empty[Int])(_ + _).size, htitle = "treeset")
   }
 
   def insertShuffled(sizes: Seq[Int] = DefaultSizes): Unit = sizes foreach { i =>

@@ -136,8 +136,8 @@ Delete counter-examples
   def example(elts: Int*) = BTree(elts: _*).toVector must_== Vector(elts: _*).distinct.sorted
 
   def delete(elts: Int*)(valueToDelete: Int) = {
-    val actual = BTree(elts: _*).-(valueToDelete).toVector
-    val expected = TreeSet(elts: _*).-(valueToDelete).toVector
-    actual must (beSorted[Int] and containTheSameElementsAs(expected))
+    val actual = BTree(elts: _*) - valueToDelete
+    val expected = TreeSet(elts: _*) - valueToDelete
+    actual.toSeq must (beSorted[Int] and containTheSameElementsAs(expected.toSeq))
   }
 }
