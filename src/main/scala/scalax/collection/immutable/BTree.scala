@@ -116,6 +116,17 @@ private[immutable] object implementation {
     final def down[M <: Level](implicit ev: L =:= Next[M]): NodeBuilder[M, A] = this.asInstanceOf[NodeBuilder[M, A]]
   }
 
+  sealed trait NodeWithOps[A] {
+    type L <: Level
+    def ops: NodeOps[L, A]
+    def node: Node[L, A]
+  }
+  def NodeWithOps[L0 <: Level, A](node0: Node[L0, A])(implicit ops0: NodeOps[L0, A]): NodeWithOps[A] = new NodeWithOps[A] {
+    type L = L0
+    def ops = ops0
+    def node = node0
+  }
+
   /*
    * Since nodes are raw Java arrays we cannot extend them with the operations we need.
    * Instead, we keep a stack of NodeOps with one instance for each level in the tree. At the bottom of the
@@ -159,6 +170,10 @@ private[immutable] object implementation {
     def rebalance(left: N, right: N)(implicit builder: NodeBuilder[L, A]): Either[N, (N, A, N)]
     def deleteAndMergeLeft(leftSibling: N, leftValue: A, node: N, a: A)(implicit builder: NodeBuilder[L, A]): Option[Either[N, (N, A, N)]]
     def deleteAndMergeRight(node: N, rightValue: A, rightSibling: N, a: A)(implicit builder: NodeBuilder[L, A]): Option[Either[N, (N, A, N)]]
+
+    def splitAt(node: N, key: A)(implicit builder: NodeBuilder[L, A]): (NodeWithOps[A], NodeWithOps[A])
+    def prepend(smallerTree: NodeWithOps[A], value: A, node: N)(implicit builder: NodeBuilder[L, A]): Either[N, (N, A, N)]
+    def append(node: N, value: A, smallerTree: NodeWithOps[A])(implicit builder: NodeBuilder[L, A]): Either[N, (N, A, N)]
   }
 
   private def valueComparator[A](implicit ordering: Ordering[A]): Comparator[AnyRef] = ordering.asInstanceOf[Comparator[AnyRef]]
@@ -274,6 +289,51 @@ private[immutable] object implementation {
     }
 
     override def pathToHead(node: N, parent: PathNode[A]): PathNode[A] = new PathLeafNode(node, parent)
+
+    override def splitAt(node: N, key: A)(implicit builder: NodeBuilder[Leaf, A]): (NodeWithOps[A], NodeWithOps[A]) = {
+      val index = search(node, key)
+      val splitPoint = if (index >= 0) index else (-index - 1)
+      val left = builder.allocCopy(node, 0, splitPoint).result()
+      val right = builder.allocCopy(node, splitPoint, node.length).result()
+      (NodeWithOps(left), NodeWithOps(right))
+    }
+
+    override def prepend(prefix: NodeWithOps[A], value: A, right: N)(implicit builder: NodeBuilder[Leaf, A]): Either[N, (N, A, N)] = {
+      if (prefix.ops.level > 0) throw new IllegalArgumentException("prefix must be leaf")
+      val left = prefix.node.asInstanceOf[N]
+      concatenate(left, value, right)
+    }
+
+    override def append(left: N, value: A, suffix: NodeWithOps[A])(implicit builder: NodeBuilder[Leaf, A]): Either[N, (N, A, N)] = {
+      if (suffix.ops.level > 0) throw new IllegalArgumentException("suffix must be leaf")
+      val right = suffix.node.asInstanceOf[N]
+      concatenate(left, value, right)
+    }
+
+    private[this] def concatenate(left: N, value: A, right: N)(implicit builder: NodeBuilder[Leaf, A]): Either[N, (N, A, N)] = {
+      val leftCount = valueCount(left)
+      val rightCount = valueCount(right)
+      val totalCount = leftCount + 1 + rightCount
+      if (totalCount <= maxValues) {
+        Left(builder.leaf(totalCount).copy(left).insertValue(value).copy(right).result())
+      } else {
+        val newLeftCount = totalCount / 2
+        val newRightCount = totalCount - 1 - newLeftCount
+        Right(if (newLeftCount < leftCount) {
+          val l: N = builder.leaf(newLeftCount).copy(left, 0, newLeftCount).result()
+          val m: A = valueAt(left, newLeftCount)
+          val r: N = builder.leaf(newRightCount).copy(left, newLeftCount + 1, leftCount).insertValue(value).copy(right).result()
+          (l, m, r)
+        } else if (newLeftCount > leftCount) {
+          val l: N = builder.leaf(newLeftCount).copy(left).insertValue(value).copy(right, 0, newLeftCount - leftCount - 1).result()
+          val m: A = valueAt(right, newLeftCount - leftCount - 1)
+          val r: N = builder.leaf(newRightCount).copy(right, newLeftCount - leftCount, rightCount).result()
+          (l, m, r)
+        } else {
+          (left, value, right)
+        })
+      }
+    }
 
     private def search(node: N, a: A): Int = Arrays.binarySearch(node, a.asInstanceOf[AnyRef], valueComparator[A])
 
@@ -505,6 +565,140 @@ private[immutable] object implementation {
     override def pathToHead(node: N, parent: PathNode[A]): PathNode[A] =
       childOps.pathToHead(leftChild(node, 1), new PathInternalNode(node, parent))
 
+    override def splitAt(node: N, key: A)(implicit builder: NodeBuilder[Next[L], A]): (NodeWithOps[A], NodeWithOps[A]) = {
+      val children = valueCount(node)
+      val index = search(node, key)
+      val splitPoint = if (index >= 0) index else -(index + 1)
+      val child = childAt(node, splitPoint + children)
+      val (leftChildSplit, rightChildSplit) = childOps.splitAt(child, key)(builder.down)
+      val leftSplit = if (splitPoint == 1) leftChildSplit else {
+        val leftChild = childAt(node, splitPoint + children - 1)
+        childOps.append(leftChild, valueAt(node, splitPoint - 1), leftChildSplit)(builder.down) match {
+          case Left(merged) if splitPoint == 2 =>
+            NodeWithOps(merged)
+          case Left(merged) =>
+            builder.internal(splitPoint - 2)
+            builder.copy(node, 1, splitPoint - 1)
+            builder.copy(node, 1 + children, children + splitPoint - 1)
+            builder.insertChild(merged)
+            NodeWithOps(builder.recalculateSize().result())
+          case Right((left, middle, right)) =>
+            builder.internal(splitPoint - 1)
+            builder.copy(node, 1, splitPoint - 1)
+            builder.insertValue(middle)
+            builder.copy(node, 1 + children, children + splitPoint - 1)
+            builder.insertChild(left)
+            builder.insertChild(right)
+            NodeWithOps(builder.recalculateSize().result())
+        }
+      }
+      val rightSplit = if (splitPoint == children + 1) rightChildSplit else {
+        val rightChild = childAt(node, splitPoint + children + 1)
+        childOps.prepend(rightChildSplit, valueAt(node, splitPoint), rightChild)(builder.down) match {
+          case Left(merged) if splitPoint == children =>
+            NodeWithOps(merged)
+          case Left(merged) =>
+            builder.internal(children - (splitPoint - 1) - 1)
+            builder.copy(node, splitPoint + 1, children + 1)
+            builder.insertChild(merged)
+            builder.copy(node, children + splitPoint + 2, node.length)
+            NodeWithOps(builder.recalculateSize().result())
+          case Right((left, value, right)) =>
+            builder.internal(children - (splitPoint - 1))
+            builder.insertValue(value)
+            builder.copy(node, splitPoint + 1, children + 1)
+            builder.insertChild(left)
+            builder.insertChild(right)
+            builder.copy(node, children + splitPoint + 2, node.length)
+            NodeWithOps(builder.recalculateSize().result())
+        }
+      }
+      (leftSplit, rightSplit)
+    }
+
+    override def prepend(prefix: NodeWithOps[A], value: A, node: N)(implicit builder: NodeBuilder[Next[L], A]): Either[N, (N, A, N)] = {
+      val children = valueCount(node)
+      if (prefix.ops.level < level) {
+        val leftMostChild = childAt(node, 1 + children)
+        childOps.prepend(prefix, value, leftMostChild)(builder.down) match {
+          case Left(merged) =>
+            Left(childUpdated(node, 0, children, 0, merged))
+          case Right((left, middle, right)) if children < maxValues =>
+            Left(valueInserted(node, 0, children, 1, left, middle, right))
+          case Right((left, middle, right)) =>
+            Right(split(node, 1, left, middle, right))
+        }
+      } else if (prefix.ops.level == level) {
+        val left = prefix.node.asInstanceOf[N]
+        concatenate(left, value, node)
+      } else {
+        // FIXME
+        throw new RuntimeException("prefix must be smaller")
+      }
+    }
+
+    override def append(node: N, value: A, suffix: NodeWithOps[A])(implicit builder: NodeBuilder[Next[L], A]): Either[N, (N, A, N)] = {
+      val children = valueCount(node)
+      if (suffix.ops.level < level) {
+        val rightMostChild = childAt(node, 1 + children + children)
+        childOps.append(rightMostChild, value, suffix)(builder.down) match {
+          case Left(merged) =>
+            Left(childUpdated(node, 0, children, children, merged))
+          case Right((left, middle, right)) if children < maxValues =>
+            Left(valueInserted(node, 0, children, 1 + children, left, middle, right))
+          case Right((left, middle, right)) =>
+            Right(split(node, 1 + children, left, middle, right))
+        }
+      } else if (suffix.ops.level == level) {
+        val right = suffix.node.asInstanceOf[N]
+        concatenate(node, value, right)
+      } else {
+        // FIXME
+        throw new RuntimeException("prefix must be smaller")
+      }
+    }
+
+    private[this] def concatenate(left: N, value: A, right: N)(implicit builder: NodeBuilder[Next[L], A]): Either[N, (N, A, N)] = {
+      val leftCount = valueCount(left)
+      val rightCount = valueCount(right)
+      val totalCount = leftCount + 1 + rightCount
+      if (totalCount <= maxValues) {
+        Left(builder.internal(totalCount)
+          .copy(left, 1, 1 + leftCount).insertValue(value).copy(right, 1, 1 + rightCount)
+          .copy(left, 1 + leftCount, left.length).copy(right, 1 + rightCount, right.length)
+          .recalculateSize().result())
+      } else {
+        val newLeftCount = totalCount / 2
+        val newRightCount = totalCount - 1 - newLeftCount
+        Right(if (newLeftCount < leftCount) {
+          val l: N = builder.internal(newLeftCount)
+            .copy(left, 1, 1 + newLeftCount)
+            .copy(left, 1 + leftCount, 1 + leftCount + newLeftCount + 1)
+            .recalculateSize().result()
+          val m: A = valueAt(left, 1 + newLeftCount)
+          val r: N = builder.internal(newRightCount)
+            .copy(left, 1 + newLeftCount + 1, 1 + leftCount).insertValue(value).copy(right, 1, 1 + rightCount)
+            .copy(left, 1 + leftCount + newLeftCount + 1, left.length).copy(right, 1 + rightCount, right.length)
+            .recalculateSize().result()
+//          println(s"l=${l.mkString(",")},m=$m,r=${r.mkString(",")} (left=${left.mkString(",")}, value=$value, right=${right.mkString(",")}")
+          (l, m, r)
+        } else if (newLeftCount > leftCount) {
+          val l: N = builder.internal(newLeftCount)
+            .copy(left, 1, 1 + leftCount).insertValue(value).copy(right, 1, 1 + newLeftCount - leftCount - 1)
+            .copy(left, 1 + leftCount, left.length).copy(right, 1 + rightCount, 1 + rightCount + newLeftCount - leftCount)
+            .recalculateSize().result()
+          val m: A = valueAt(right, 1 + newLeftCount - leftCount - 1)
+          val r: N = builder.internal(newRightCount)
+            .copy(right, 1 + newLeftCount - leftCount, 1 + rightCount)
+            .copy(right, 1 + rightCount + newLeftCount - leftCount, right.length)
+            .recalculateSize().result()
+          (l, m, r)
+        } else {
+          (left, value, right)
+        })
+      }
+    }
+
     private def deleteValue(node: N, a: A)(implicit builder: NodeBuilder[Next[L], A]): (Int, Option[Either[ChildNode, (ChildNode, A, ChildNode)]]) = {
       val index = search(node, a)
       if (index >= 0) {
@@ -653,7 +847,16 @@ private[immutable] object implementation {
     override def size: Int = ops.size(root)
     override def contains(a: A): Boolean = ops.contains(root, a)
     override def iterator: Iterator[A] = new BTreeIterator(root)
-    override def rangeImpl(from: Option[A], until: Option[A]): scalax.collection.immutable.BTree[A] = ???
+    override def rangeImpl(from: Option[A], until: Option[A]): BTree[A] = (from, until) match {
+      case (None, None)      => this
+      case (Some(key), None) =>
+        val nodeWithOps = ops.splitAt(root, key)(ops.newBuilder)._2
+        new Root(nodeWithOps.node)(ordering, nodeWithOps.ops)
+      case (None, Some(key)) =>
+        val nodeWithOps = ops.splitAt(root, key)(ops.newBuilder)._1
+        new Root(nodeWithOps.node)(ordering, nodeWithOps.ops)
+      case (from, until)     => rangeImpl(from, None).rangeImpl(None, until)
+    }
     override def stringPrefix: String = "BTree"
   }
 
