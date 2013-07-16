@@ -382,7 +382,7 @@ private[immutable] object implementation {
     override type PreviousLevel = L
     override val level = childOps.level + 1
 
-    override def valueCount(node: N): Int = (node.length - 2) / 2
+    override def valueCount(node: N): Int = (node.length >> 1) - 1
     override def size(node: N): Int = node(0).asInstanceOf[Int]
     override def isEmpty(node: N): Boolean = false
 
