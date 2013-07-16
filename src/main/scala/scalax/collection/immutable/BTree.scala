@@ -174,6 +174,9 @@ private[immutable] object implementation {
     def splitAt(node: N, key: A)(implicit builder: NodeBuilder[L, A]): (NodeWithOps[A], NodeWithOps[A])
     def prepend(smallerTree: NodeWithOps[A], value: A, node: N)(implicit builder: NodeBuilder[L, A]): Either[N, (N, A, N)]
     def append(node: N, value: A, smallerTree: NodeWithOps[A])(implicit builder: NodeBuilder[L, A]): Either[N, (N, A, N)]
+
+    def head(node: N): A
+    def last(node: N): A
   }
 
   private def valueComparator[A](implicit ordering: Ordering[A]): Comparator[AnyRef] = ordering.asInstanceOf[Comparator[AnyRef]]
@@ -308,6 +311,16 @@ private[immutable] object implementation {
       if (suffix.ops.level > 0) throw new IllegalArgumentException("suffix must be leaf")
       val right = suffix.node.asInstanceOf[N]
       concatenate(left, value, right)
+    }
+
+    override def head(node: N): A = {
+      if (isEmpty(node)) throw new NoSuchElementException("empty set")
+      valueAt(node, 0)
+    }
+
+    override def last(node: N): A = {
+      if (isEmpty(node)) throw new NoSuchElementException("empty set")
+      valueAt(node, node.length - 1)
     }
 
     private[this] def concatenate(left: N, value: A, right: N)(implicit builder: NodeBuilder[Leaf, A]): Either[N, (N, A, N)] = {
@@ -658,6 +671,9 @@ private[immutable] object implementation {
       }
     }
 
+    override def head(node: N): A = childOps.head(childAt(node, 1 + valueCount(node)))
+    override def last(node: N): A = childOps.last(childAt(node, node.length - 1))
+
     private[this] def concatenate(left: N, value: A, right: N)(implicit builder: NodeBuilder[Next[L], A]): Either[N, (N, A, N)] = {
       val leftCount = valueCount(left)
       val rightCount = valueCount(right)
@@ -858,6 +874,14 @@ private[immutable] object implementation {
       case (from, until)     => rangeImpl(from, None).rangeImpl(None, until)
     }
     override def stringPrefix: String = "BTree"
+
+    // Optimized implementations of various methods.
+    override def head = ops.head(root)
+    override def headOption = if (isEmpty) None else Some(head)
+    override def last = ops.last(root)
+    override def lastOption = if (isEmpty) None else Some(last)
+    override def tail = this - head
+    override def init = this - last
   }
 
   sealed trait PathNode[A] {

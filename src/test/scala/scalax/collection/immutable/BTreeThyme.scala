@@ -1,7 +1,6 @@
 package scalax.collection.immutable
 
-import scala.collection.immutable.TreeSet
-import scala.collection.immutable.HashSet
+import scala.collection.immutable.{ HashSet, SortedSet, TreeSet }
 
 object BTreeThyme {
   val random = new util.Random(1233312)
@@ -90,4 +89,16 @@ object BTreeThyme {
     val xs = BTreeThyme.shuffled.take(size)
     th.pbench(BTree(xs: _*)(implicitly, p1).size, title = s"btree L=${p1.minLeafValues},I=${p1.minInternalValues},N=${size}")
   }
+
+  private def simpleBench[A](label: String, f: SortedSet[Integer] => A): Unit = DefaultSizes foreach { i =>
+    val xs = BTreeThyme.shuffled.take(i)
+    val btree = BTree(xs: _*)
+    val ts = TreeSet(xs: _*)
+    th.pbenchOff(s"$label of $i shuffled values")(f(btree), ftitle = "btree")(f(ts), htitle = "treeset")
+  }
+
+  def benchHead() = simpleBench("head", _.head)
+  def benchTail() = simpleBench("tail", _.tail)
+  def benchLast() = simpleBench("last", _.last)
+  def benchInit() = simpleBench("init", _.init)
 }

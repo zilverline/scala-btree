@@ -29,6 +29,8 @@ A B-Tree should
   contain all elements in order                      $containsElementsInOrder
   iterate all elements in order                      $iterateElementsInOrder
   support splitting                                  $splittable
+  head/tail identity                                 $headTailIdentity
+  init/last identity                                 $initLastIdentity
 
 A non-empty B-Tree should
   not contain deleted element                        $notContainDeletedElement
@@ -134,6 +136,12 @@ Range examples
   def iterateElementsInOrder = Prop.forAll(arbitrary[List[Int]]) { elements =>
     BTree(elements: _*).iterator.toVector must (beSorted[Int] and containTheSameElementsAs(elements.distinct))
   }
+  def headTailIdentity = Prop.forAll { subject: BTree[Int] => subject.nonEmpty ==> {
+    subject must_== (subject.tail + subject.head)
+  }}
+  def initLastIdentity = Prop.forAll { subject: BTree[Int] => subject.nonEmpty ==> {
+    subject must_== (subject.init + subject.last)
+  }}
 
   def GenNonEmptyTreeWithSelectedElement[T: Arbitrary: Ordering] = for {
     elements <- Gen.listOf(arbitrary[T])
