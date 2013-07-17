@@ -74,6 +74,22 @@ object BTreeThyme {
     th.pbenchOff(s"iterate $i sequential values")(btree.iterator.size, ftitle = "btree")(ts.iterator.size, htitle = "treeset")
   }
 
+  def splitShuffled(sizes: Seq[Int] = DefaultSizes): Unit = sizes foreach { i =>
+    val xs = BTreeThyme.shuffled.take(i)
+    val splits = xs.take(1000)
+    val btree = BTree(xs: _*)
+    val ts = TreeSet(xs: _*)
+    th.pbenchOff(s"split $i shuffled values (${splits.size} times)")(splits.map(i => btree.from(i).size), ftitle = "btree")(splits.map(i => ts.from(i).size), htitle = "treeset")
+  }
+
+  def splitSequential(sizes: Seq[Int] = DefaultSizes): Unit = sizes foreach { i =>
+    val xs = BTreeThyme.values.take(i)
+    val splits = random.shuffle(xs).take(1000)
+    val btree = BTree(xs: _*)
+    val ts = TreeSet(xs: _*)
+    th.pbenchOff(s"split $i sequential values (${splits.size} times)")(splits.map(i => btree.from(i).size), ftitle = "btree")(splits.map(i => ts.from(i).size), htitle = "treeset")
+  }
+
   def insertShuffledVaryingOrder(sizes: Seq[Int] = DefaultSizes, parameters: Seq[BTree.Parameters] = DefaultParameters): Unit = for {
     size <- sizes
     (p1, p2) <- parameters.zip(parameters.tail)

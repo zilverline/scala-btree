@@ -171,7 +171,8 @@ private[immutable] object implementation {
     def deleteAndMergeLeft(leftSibling: N, leftValue: A, node: N, a: A)(implicit builder: NodeBuilder[L, A]): Option[Either[N, (N, A, N)]]
     def deleteAndMergeRight(node: N, rightValue: A, rightSibling: N, a: A)(implicit builder: NodeBuilder[L, A]): Option[Either[N, (N, A, N)]]
 
-    def splitAt(node: N, key: A)(implicit builder: NodeBuilder[L, A]): (NodeWithOps[A], NodeWithOps[A])
+    def splitAtKey(node: N, key: A)(implicit builder: NodeBuilder[L, A]): (NodeWithOps[A], NodeWithOps[A])
+
     def prepend(smallerTree: NodeWithOps[A], value: A, node: N)(implicit builder: NodeBuilder[L, A]): Either[N, (N, A, N)]
     def append(node: N, value: A, smallerTree: NodeWithOps[A])(implicit builder: NodeBuilder[L, A]): Either[N, (N, A, N)]
 
@@ -293,7 +294,7 @@ private[immutable] object implementation {
 
     override def pathToHead(node: N, parent: PathNode[A]): PathNode[A] = new PathLeafNode(node, parent)
 
-    override def splitAt(node: N, key: A)(implicit builder: NodeBuilder[Leaf, A]): (NodeWithOps[A], NodeWithOps[A]) = {
+    override def splitAtKey(node: N, key: A)(implicit builder: NodeBuilder[Leaf, A]): (NodeWithOps[A], NodeWithOps[A]) = {
       val index = search(node, key)
       val splitPoint = if (index >= 0) index else (-index - 1)
       val left = builder.allocCopy(node, 0, splitPoint).result()
@@ -406,18 +407,25 @@ private[immutable] object implementation {
         val insertionPoint = -index - 1
         val childIndex = insertionPoint + children
         val child = childAt(node, childIndex)
-        childOps.insert(child, a)(builder.down) match {
-          case Left(updatedChild) =>
-            builder.allocCopy(node)
-            builder.updateChild(childIndex, updatedChild)
-            val sizeChange = childOps.size(updatedChild) - childOps.size(child)
-            builder.setSize(size(node) + sizeChange)
-            Left(builder.result())
-          case Right((left, middle, right)) if children < maxValues =>
-            Left(valueInserted(node, 0, children, insertionPoint, left, middle, right))
-          case Right((left, middle, right)) =>
-            Right(split(node, insertionPoint, left, middle, right))
-        }
+        childUpdatedOrSplit(node, insertionPoint, childOps.insert(child, a)(builder.down))
+      }
+    }
+
+    private def childUpdatedOrSplit(node: N, insertionPoint: Int, child: Either[ChildNode, (ChildNode, A, ChildNode)])(implicit builder: NodeBuilder[Next[L], A]): Either[N, (N, A, N)] = {
+      val children = valueCount(node)
+      val childIndex = insertionPoint + children
+      child match {
+        case Left(updatedChild) =>
+          val originalChild = childAt(node, childIndex)
+          val sizeChange = childOps.size(updatedChild) - childOps.size(originalChild)
+          builder.allocCopy(node)
+          builder.setSize(size(node) + sizeChange)
+          builder.updateChild(childIndex, updatedChild)
+          Left(builder.result())
+        case Right((left, middle, right)) if children < maxValues =>
+          Left(valueInserted(node, 0, children, insertionPoint, left, middle, right))
+        case Right((left, middle, right)) =>
+          Right(split(node, insertionPoint, left, middle, right))
       }
     }
 
@@ -578,12 +586,12 @@ private[immutable] object implementation {
     override def pathToHead(node: N, parent: PathNode[A]): PathNode[A] =
       childOps.pathToHead(leftChild(node, 1), new PathInternalNode(node, parent))
 
-    override def splitAt(node: N, key: A)(implicit builder: NodeBuilder[Next[L], A]): (NodeWithOps[A], NodeWithOps[A]) = {
+    override def splitAtKey(node: N, key: A)(implicit builder: NodeBuilder[Next[L], A]): (NodeWithOps[A], NodeWithOps[A]) = {
       val children = valueCount(node)
       val index = search(node, key)
       val splitPoint = if (index >= 0) index else -(index + 1)
       val child = childAt(node, splitPoint + children)
-      val (leftChildSplit, rightChildSplit) = childOps.splitAt(child, key)(builder.down)
+      val (leftChildSplit, rightChildSplit) = childOps.splitAtKey(child, key)(builder.down)
       val leftSplit = if (splitPoint == 1) leftChildSplit else {
         val leftChild = childAt(node, splitPoint + children - 1)
         childOps.append(leftChild, valueAt(node, splitPoint - 1), leftChildSplit)(builder.down) match {
@@ -633,14 +641,8 @@ private[immutable] object implementation {
       val children = valueCount(node)
       if (prefix.ops.level < level) {
         val leftMostChild = childAt(node, 1 + children)
-        childOps.prepend(prefix, value, leftMostChild)(builder.down) match {
-          case Left(merged) =>
-            Left(childUpdated(node, 0, children, 0, merged))
-          case Right((left, middle, right)) if children < maxValues =>
-            Left(valueInserted(node, 0, children, 1, left, middle, right))
-          case Right((left, middle, right)) =>
-            Right(split(node, 1, left, middle, right))
-        }
+        val updatedOrSplit = childOps.prepend(prefix, value, leftMostChild)(builder.down)
+        childUpdatedOrSplit(node, 1, updatedOrSplit)
       } else if (prefix.ops.level == level) {
         val left = prefix.node.asInstanceOf[N]
         concatenate(left, value, node)
@@ -654,14 +656,8 @@ private[immutable] object implementation {
       val children = valueCount(node)
       if (suffix.ops.level < level) {
         val rightMostChild = childAt(node, 1 + children + children)
-        childOps.append(rightMostChild, value, suffix)(builder.down) match {
-          case Left(merged) =>
-            Left(childUpdated(node, 0, children, children, merged))
-          case Right((left, middle, right)) if children < maxValues =>
-            Left(valueInserted(node, 0, children, 1 + children, left, middle, right))
-          case Right((left, middle, right)) =>
-            Right(split(node, 1 + children, left, middle, right))
-        }
+        val updatedOrSplit = childOps.append(rightMostChild, value, suffix)(builder.down)
+        childUpdatedOrSplit(node, 1 + children, updatedOrSplit)
       } else if (suffix.ops.level == level) {
         val right = suffix.node.asInstanceOf[N]
         concatenate(node, value, right)
@@ -696,7 +692,6 @@ private[immutable] object implementation {
             .copy(left, 1 + newLeftCount + 1, 1 + leftCount).insertValue(value).copy(right, 1, 1 + rightCount)
             .copy(left, 1 + leftCount + newLeftCount + 1, left.length).copy(right, 1 + rightCount, right.length)
             .recalculateSize().result()
-//          println(s"l=${l.mkString(",")},m=$m,r=${r.mkString(",")} (left=${left.mkString(",")}, value=$value, right=${right.mkString(",")}")
           (l, m, r)
         } else if (newLeftCount > leftCount) {
           val l: N = builder.internal(newLeftCount)
@@ -864,14 +859,16 @@ private[immutable] object implementation {
     override def contains(a: A): Boolean = ops.contains(root, a)
     override def iterator: Iterator[A] = new BTreeIterator(root)
     override def rangeImpl(from: Option[A], until: Option[A]): BTree[A] = (from, until) match {
-      case (None, None)      => this
+      case (None, None)      =>
+        this
       case (Some(key), None) =>
-        val nodeWithOps = ops.splitAt(root, key)(ops.newBuilder)._2
+        val nodeWithOps = ops.splitAtKey(root, key)(ops.newBuilder)._2
         new Root(nodeWithOps.node)(ordering, nodeWithOps.ops)
       case (None, Some(key)) =>
-        val nodeWithOps = ops.splitAt(root, key)(ops.newBuilder)._1
+        val nodeWithOps = ops.splitAtKey(root, key)(ops.newBuilder)._1
         new Root(nodeWithOps.node)(ordering, nodeWithOps.ops)
-      case (from, until)     => rangeImpl(from, None).rangeImpl(None, until)
+      case (from, until)     =>
+        rangeImpl(from, None).rangeImpl(None, until)
     }
     override def stringPrefix: String = "BTree"
 
