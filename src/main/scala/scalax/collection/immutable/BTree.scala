@@ -142,11 +142,13 @@ private[immutable] object implementation {
     type ChildNode = Node[PreviousLevel, A]
     type ChildOps = NodeOps[PreviousLevel, A]
 
+    type Builder = NodeBuilder[L, A]
+
     def level: Int
     def parameters: BTree.Parameters
     def ordering: Ordering[A]
 
-    def newBuilder = new NodeBuilder[L, A]
+    def newBuilder: Builder = new NodeBuilder[L, A]
 
     def valueCount(node: N): Int
 
@@ -162,19 +164,19 @@ private[immutable] object implementation {
     def isEmpty(node: N): Boolean
 
     def contains(node: N, a: A): Boolean
-    def insert(node: N, a: A)(implicit builder: NodeBuilder[L, A]): Either[N, (N, A, N)]
+    def insert(node: N, a: A)(implicit builder: Builder): Either[N, (N, A, N)]
 
     def pathToHead(node: N, parent: PathNode[A] = null): PathNode[A]
 
-    def deleteFromRoot(node: N, a: A)(implicit builder: NodeBuilder[L, A]): Option[Either[N, ChildNode]]
-    def rebalance(left: N, right: N)(implicit builder: NodeBuilder[L, A]): Either[N, (N, A, N)]
-    def deleteAndMergeLeft(leftSibling: N, leftValue: A, node: N, a: A)(implicit builder: NodeBuilder[L, A]): Option[Either[N, (N, A, N)]]
-    def deleteAndMergeRight(node: N, rightValue: A, rightSibling: N, a: A)(implicit builder: NodeBuilder[L, A]): Option[Either[N, (N, A, N)]]
+    def deleteFromRoot(node: N, a: A)(implicit builder: Builder): Option[Either[N, ChildNode]]
+    def rebalance(left: N, right: N)(implicit builder: Builder): Either[N, (N, A, N)]
+    def deleteAndMergeLeft(leftSibling: N, leftValue: A, node: N, a: A)(implicit builder: Builder): Option[Either[N, (N, A, N)]]
+    def deleteAndMergeRight(node: N, rightValue: A, rightSibling: N, a: A)(implicit builder: Builder): Option[Either[N, (N, A, N)]]
 
-    def splitAtKey(node: N, key: A)(implicit builder: NodeBuilder[L, A]): (NodeWithOps[A], NodeWithOps[A])
+    def splitAtKey(node: N, key: A)(implicit builder: Builder): (NodeWithOps[A], NodeWithOps[A])
 
-    def prepend(smallerTree: NodeWithOps[A], value: A, node: N)(implicit builder: NodeBuilder[L, A]): Either[N, (N, A, N)]
-    def append(node: N, value: A, smallerTree: NodeWithOps[A])(implicit builder: NodeBuilder[L, A]): Either[N, (N, A, N)]
+    def prepend(smallerTree: NodeWithOps[A], value: A, node: N)(implicit builder: Builder): Either[N, (N, A, N)]
+    def append(node: N, value: A, smallerTree: NodeWithOps[A])(implicit builder: Builder): Either[N, (N, A, N)]
 
     def head(node: N): A
     def last(node: N): A
@@ -208,7 +210,7 @@ private[immutable] object implementation {
     override def isEmpty(node: N): Boolean = size(node) == 0
     override def contains(node: N, a: A): Boolean = search(node, a) >= 0
 
-    override def insert(node: N, a: A)(implicit builder: NodeBuilder[Leaf, A]): Either[N, (N, A, N)] = {
+    override def insert(node: N, a: A)(implicit builder: Builder): Either[N, (N, A, N)] = {
       val index = search(node, a)
       if (index >= 0) {
         Left(builder.allocCopy(node).updateValue(index, a).result())
@@ -237,13 +239,13 @@ private[immutable] object implementation {
       }
     }
 
-    override def deleteFromRoot(node: N, a: A)(implicit builder: NodeBuilder[Leaf, A]): Option[Either[N, ChildNode]] = {
+    override def deleteFromRoot(node: N, a: A)(implicit builder: Builder): Option[Either[N, ChildNode]] = {
       val index = search(node, a)
       if (index < 0) None
       else Some(Left(valueDeleted(node, index)))
     }
 
-    override def rebalance(left: N, right: N)(implicit builder: NodeBuilder[Leaf, A]): Either[N, (N, A, N)] = {
+    override def rebalance(left: N, right: N)(implicit builder: Builder): Either[N, (N, A, N)] = {
       if (left.length == minValues && right.length == minValues)
         Left(builder.leaf(left.length + right.length).copy(left).copy(right).result())
       else
@@ -254,7 +256,7 @@ private[immutable] object implementation {
             (left, valueAt(right, 0), valueDeleted(right, 0)))
     }
 
-    override def deleteAndMergeLeft(leftSibling: N, leftValue: A, node: N, a: A)(implicit builder: NodeBuilder[Leaf, A]): Option[Either[N, (N, A, N)]] = {
+    override def deleteAndMergeLeft(leftSibling: N, leftValue: A, node: N, a: A)(implicit builder: Builder): Option[Either[N, (N, A, N)]] = {
       val index = search(node, a)
       if (index < 0)
         None
@@ -273,7 +275,7 @@ private[immutable] object implementation {
       }
     }
 
-    override def deleteAndMergeRight(node: N, rightValue: A, rightSibling: N, a: A)(implicit builder: NodeBuilder[Leaf, A]): Option[Either[N, (N, A, N)]] = {
+    override def deleteAndMergeRight(node: N, rightValue: A, rightSibling: N, a: A)(implicit builder: Builder): Option[Either[N, (N, A, N)]] = {
       val index = search(node, a)
       if (index < 0)
         None
@@ -294,7 +296,7 @@ private[immutable] object implementation {
 
     override def pathToHead(node: N, parent: PathNode[A]): PathNode[A] = new PathLeafNode(node, parent)
 
-    override def splitAtKey(node: N, key: A)(implicit builder: NodeBuilder[Leaf, A]): (NodeWithOps[A], NodeWithOps[A]) = {
+    override def splitAtKey(node: N, key: A)(implicit builder: Builder): (NodeWithOps[A], NodeWithOps[A]) = {
       val index = search(node, key)
       val splitPoint = if (index >= 0) index else (-index - 1)
       val left = builder.allocCopy(node, 0, splitPoint).result()
@@ -302,14 +304,14 @@ private[immutable] object implementation {
       (NodeWithOps(left), NodeWithOps(right))
     }
 
-    override def prepend(prefix: NodeWithOps[A], value: A, right: N)(implicit builder: NodeBuilder[Leaf, A]): Either[N, (N, A, N)] = {
-      if (prefix.ops.level > 0) throw new IllegalArgumentException("prefix must be leaf")
+    override def prepend(prefix: NodeWithOps[A], value: A, right: N)(implicit builder: Builder): Either[N, (N, A, N)] = {
+      assert(prefix.ops.level == 0, "prefix must be leaf")
       val left = prefix.node.asInstanceOf[N]
       concatenate(left, value, right)
     }
 
-    override def append(left: N, value: A, suffix: NodeWithOps[A])(implicit builder: NodeBuilder[Leaf, A]): Either[N, (N, A, N)] = {
-      if (suffix.ops.level > 0) throw new IllegalArgumentException("suffix must be leaf")
+    override def append(left: N, value: A, suffix: NodeWithOps[A])(implicit builder: Builder): Either[N, (N, A, N)] = {
+      assert(suffix.ops.level == 0, "suffix must be leaf")
       val right = suffix.node.asInstanceOf[N]
       concatenate(left, value, right)
     }
@@ -324,7 +326,7 @@ private[immutable] object implementation {
       valueAt(node, node.length - 1)
     }
 
-    private[this] def concatenate(left: N, value: A, right: N)(implicit builder: NodeBuilder[Leaf, A]): Either[N, (N, A, N)] = {
+    private[this] def concatenate(left: N, value: A, right: N)(implicit builder: Builder): Either[N, (N, A, N)] = {
       val leftCount = valueCount(left)
       val rightCount = valueCount(right)
       val totalCount = leftCount + 1 + rightCount
@@ -351,17 +353,17 @@ private[immutable] object implementation {
 
     private def search(node: N, a: A): Int = Arrays.binarySearch(node, a.asInstanceOf[AnyRef], valueComparator[A])
 
-    private def copied(source: N, from: Int, to: Int)(implicit builder: NodeBuilder[Leaf, A]): N =
+    private def copied(source: N, from: Int, to: Int)(implicit builder: Builder): N =
       builder.allocCopy(source, from, to).result()
 
-    private def valueInserted(source: N, from: Int, to: Int, position: Int, value: A)(implicit builder: NodeBuilder[Leaf, A]): N =
+    private def valueInserted(source: N, from: Int, to: Int, position: Int, value: A)(implicit builder: Builder): N =
       builder.leaf(to - from + 1)
         .copy(source, from, position)
         .insertValue(value)
         .copy(source, position, to)
         .result()
 
-    private def valueDeleted(node: N, index: Int)(implicit builder: NodeBuilder[Leaf, A]): N =
+    private def valueDeleted(node: N, index: Int)(implicit builder: Builder): N =
       builder.leaf(node.length - 1).copyDeleted(node, index).result()
   }
 
@@ -398,7 +400,7 @@ private[immutable] object implementation {
       }
     }
 
-    override def insert(node: N, a: A)(implicit builder: NodeBuilder[Next[L], A]): Either[N, (N, A, N)] = {
+    override def insert(node: N, a: A)(implicit builder: Builder): Either[N, (N, A, N)] = {
       val index = search(node, a)
       if (index >= 0) {
         Left(builder.allocCopy(node).updateValue(index, a).result())
@@ -411,7 +413,7 @@ private[immutable] object implementation {
       }
     }
 
-    private def childUpdatedOrSplit(node: N, insertionPoint: Int, child: Either[ChildNode, (ChildNode, A, ChildNode)])(implicit builder: NodeBuilder[Next[L], A]): Either[N, (N, A, N)] = {
+    private def childUpdatedOrSplit(node: N, insertionPoint: Int, child: Either[ChildNode, (ChildNode, A, ChildNode)])(implicit builder: Builder): Either[N, (N, A, N)] = {
       val children = valueCount(node)
       val childIndex = insertionPoint + children
       child match {
@@ -429,7 +431,7 @@ private[immutable] object implementation {
       }
     }
 
-    private def split(node: N, insertionPoint: Int, left: ChildNode, middle: A, right: ChildNode)(implicit builder: NodeBuilder[Next[L], A]): (N, A, N) = {
+    private def split(node: N, insertionPoint: Int, left: ChildNode, middle: A, right: ChildNode)(implicit builder: Builder): (N, A, N) = {
       val children = valueCount(node)
       if (insertionPoint < minValues + 1) {
         val l: N = valueInserted(node, 0, minValues - 1, insertionPoint, left, middle, right)
@@ -449,7 +451,7 @@ private[immutable] object implementation {
       }
     }
 
-    private def valueInserted(node: N, from: Int, to: Int, insertionPoint: Int, left: ChildNode, middle: A, right: ChildNode)(implicit builder: NodeBuilder[Next[L], A]): N = {
+    private def valueInserted(node: N, from: Int, to: Int, insertionPoint: Int, left: ChildNode, middle: A, right: ChildNode)(implicit builder: Builder): N = {
       val children = valueCount(node)
       val childIndex = insertionPoint + children
       builder.internal(to - from + 1)
@@ -463,7 +465,7 @@ private[immutable] object implementation {
       builder.recalculateSize().result()
     }
 
-    private def copied(node: N, from: Int, to: Int)(implicit builder: NodeBuilder[Next[L], A]): N = {
+    private def copied(node: N, from: Int, to: Int)(implicit builder: Builder): N = {
       val children = valueCount(node)
       builder.internal(to - from)
       builder.copy(node, 1 + from, 1 + to)
@@ -471,7 +473,7 @@ private[immutable] object implementation {
       builder.recalculateSize().result()
     }
 
-    private def childUpdated(node: N, from: Int, to: Int, childIndex: Int, child: ChildNode)(implicit builder: NodeBuilder[Next[L], A]): N = {
+    private def childUpdated(node: N, from: Int, to: Int, childIndex: Int, child: ChildNode)(implicit builder: Builder): N = {
       val children = valueCount(node)
       builder.internal(to - from)
       builder.copy(node, 1 + from, 1 + to)
@@ -485,7 +487,7 @@ private[immutable] object implementation {
     override def leftChild(node: N, index: Int): ChildNode = childAt(node, 1 + valueCount(node) + index - 1)
     override def rightChild(node: N, index: Int): ChildNode = childAt(node, 1 + valueCount(node) + index)
 
-    override def deleteFromRoot(node: N, a: A)(implicit builder: NodeBuilder[Next[L], A]): Option[Either[N, ChildNode]] = {
+    override def deleteFromRoot(node: N, a: A)(implicit builder: Builder): Option[Either[N, ChildNode]] = {
       val children = valueCount(node)
       val (index, result) = deleteValue(node, a)
       result match {
@@ -499,7 +501,7 @@ private[immutable] object implementation {
           Some(Left(replaceUpdatedChildren(node, index, left, middle, right)))
       }
     }
-    def deleteAndMergeLeft(leftSibling: N, leftValue: A, node: N, a: A)(implicit builder: NodeBuilder[Next[L], A]): Option[Either[N, (N, A, N)]] = {
+    def deleteAndMergeLeft(leftSibling: N, leftValue: A, node: N, a: A)(implicit builder: Builder): Option[Either[N, (N, A, N)]] = {
       val children = valueCount(node)
       val (index, result) = deleteValue(node, a)
       result match {
@@ -515,7 +517,7 @@ private[immutable] object implementation {
           Some(Right((leftSibling, leftValue, replaceUpdatedChildren(node, index, left, middle, right))))
       }
     }
-    def deleteAndMergeRight(node: N, rightValue: A, rightSibling: N, a: A)(implicit builder: NodeBuilder[Next[L], A]): Option[Either[N, (N, A, N)]] = {
+    def deleteAndMergeRight(node: N, rightValue: A, rightSibling: N, a: A)(implicit builder: Builder): Option[Either[N, (N, A, N)]] = {
       val children = valueCount(node)
       val (index, result) = deleteValue(node, a)
       result match {
@@ -531,7 +533,7 @@ private[immutable] object implementation {
           Some(Right((replaceUpdatedChildren(node, index, left, middle, right), rightValue, rightSibling)))
       }
     }
-    override def rebalance(left: N, right: N)(implicit builder: NodeBuilder[Next[L], A]): Either[N, (N, A, N)] = {
+    override def rebalance(left: N, right: N)(implicit builder: Builder): Either[N, (N, A, N)] = {
       val leftCount = valueCount(left)
       val rightCount = valueCount(right)
       val highestLeftChild = childAt(left, 1 + leftCount + leftCount)
@@ -586,7 +588,7 @@ private[immutable] object implementation {
     override def pathToHead(node: N, parent: PathNode[A]): PathNode[A] =
       childOps.pathToHead(leftChild(node, 1), new PathInternalNode(node, parent))
 
-    override def splitAtKey(node: N, key: A)(implicit builder: NodeBuilder[Next[L], A]): (NodeWithOps[A], NodeWithOps[A]) = {
+    override def splitAtKey(node: N, key: A)(implicit builder: Builder): (NodeWithOps[A], NodeWithOps[A]) = {
       val children = valueCount(node)
       val index = search(node, key)
       val splitPoint = if (index >= 0) index else -(index + 1)
@@ -637,7 +639,7 @@ private[immutable] object implementation {
       (leftSplit, rightSplit)
     }
 
-    override def prepend(prefix: NodeWithOps[A], value: A, node: N)(implicit builder: NodeBuilder[Next[L], A]): Either[N, (N, A, N)] = {
+    override def prepend(prefix: NodeWithOps[A], value: A, node: N)(implicit builder: Builder): Either[N, (N, A, N)] = {
       val children = valueCount(node)
       if (prefix.ops.level < level) {
         val leftMostChild = childAt(node, 1 + children)
@@ -647,12 +649,11 @@ private[immutable] object implementation {
         val left = prefix.node.asInstanceOf[N]
         concatenate(left, value, node)
       } else {
-        // FIXME
-        throw new RuntimeException("prefix must be smaller")
+        throw new AssertionError("prefix must be smaller")
       }
     }
 
-    override def append(node: N, value: A, suffix: NodeWithOps[A])(implicit builder: NodeBuilder[Next[L], A]): Either[N, (N, A, N)] = {
+    override def append(node: N, value: A, suffix: NodeWithOps[A])(implicit builder: Builder): Either[N, (N, A, N)] = {
       val children = valueCount(node)
       if (suffix.ops.level < level) {
         val rightMostChild = childAt(node, 1 + children + children)
@@ -662,15 +663,14 @@ private[immutable] object implementation {
         val right = suffix.node.asInstanceOf[N]
         concatenate(node, value, right)
       } else {
-        // FIXME
-        throw new RuntimeException("prefix must be smaller")
+        throw new AssertionError("suffix must be smaller")
       }
     }
 
     override def head(node: N): A = childOps.head(childAt(node, 1 + valueCount(node)))
     override def last(node: N): A = childOps.last(childAt(node, node.length - 1))
 
-    private[this] def concatenate(left: N, value: A, right: N)(implicit builder: NodeBuilder[Next[L], A]): Either[N, (N, A, N)] = {
+    private[this] def concatenate(left: N, value: A, right: N)(implicit builder: Builder): Either[N, (N, A, N)] = {
       val leftCount = valueCount(left)
       val rightCount = valueCount(right)
       val totalCount = leftCount + 1 + rightCount
@@ -710,7 +710,7 @@ private[immutable] object implementation {
       }
     }
 
-    private def deleteValue(node: N, a: A)(implicit builder: NodeBuilder[Next[L], A]): (Int, Option[Either[ChildNode, (ChildNode, A, ChildNode)]]) = {
+    private def deleteValue(node: N, a: A)(implicit builder: Builder): (Int, Option[Either[ChildNode, (ChildNode, A, ChildNode)]]) = {
       val index = search(node, a)
       if (index >= 0) {
         (index, Some(childOps.rebalance(leftChild(node, index), rightChild(node, index))(builder.down)))
@@ -729,7 +729,7 @@ private[immutable] object implementation {
       }
     }
 
-    private def replaceMergedChildren(node: N, insertionPoint: Int, merged: Node[L, A])(implicit builder: NodeBuilder[Next[L], A]): N = {
+    private def replaceMergedChildren(node: N, insertionPoint: Int, merged: Node[L, A])(implicit builder: Builder): N = {
       val children = valueCount(node)
       val childIndex = insertionPoint + children
       builder.internal(children - 1)
@@ -740,7 +740,7 @@ private[immutable] object implementation {
       builder.copy(node, childIndex + 2, node.length)
       builder.result()
     }
-    private def replaceUpdatedChildren(node: N, insertionPoint: Int, left: Node[L, A], middle: A, right: Node[L, A])(implicit builder: NodeBuilder[Next[L], A]): N = {
+    private def replaceUpdatedChildren(node: N, insertionPoint: Int, left: Node[L, A], middle: A, right: Node[L, A])(implicit builder: Builder): N = {
       val children = valueCount(node)
       val childIndex = insertionPoint + children
       builder.internal(children)
@@ -753,7 +753,7 @@ private[immutable] object implementation {
       builder.copy(node, childIndex + 2, node.length)
       builder.result()
     }
-    private def replaceMergedChildAndMergeWithLeft(leftSibling: N, leftValue: A, node: N, index: Int, merged: Node[L, A])(implicit builder: NodeBuilder[Next[L], A]): N = {
+    private def replaceMergedChildAndMergeWithLeft(leftSibling: N, leftValue: A, node: N, index: Int, merged: Node[L, A])(implicit builder: Builder): N = {
       val children = valueCount(node)
       val childIndex = index + children
       builder.internal(maxValues)
@@ -768,7 +768,7 @@ private[immutable] object implementation {
       builder.copy(node, childIndex + 2, node.length)
       builder.result()
     }
-    private def replaceMergedChildAndMergeWithRight(node: N, rightValue: A, rightSibling: N, index: Int, merged: Node[L, A])(implicit builder: NodeBuilder[Next[L], A]): N = {
+    private def replaceMergedChildAndMergeWithRight(node: N, rightValue: A, rightSibling: N, index: Int, merged: Node[L, A])(implicit builder: Builder): N = {
       val children = valueCount(node)
       val childIndex = index + children
       builder.internal(maxValues)
@@ -783,7 +783,7 @@ private[immutable] object implementation {
       builder.copy(rightSibling, 1 + valueCount(rightSibling), rightSibling.length)
       builder.result()
     }
-    private def replaceMergedChildAndTakeFromLeft(leftSibling: N, leftValue: A, node: N, index: Int, merged: Node[L, A])(implicit builder: NodeBuilder[Next[L], A]): (N, A, N) = {
+    private def replaceMergedChildAndTakeFromLeft(leftSibling: N, leftValue: A, node: N, index: Int, merged: Node[L, A])(implicit builder: Builder): (N, A, N) = {
       val leftCount = valueCount(leftSibling)
       builder.internal(leftCount - 1)
       builder.copy(leftSibling, 1, 1 + leftCount - 1)
@@ -805,7 +805,7 @@ private[immutable] object implementation {
       val updatedRight = builder.result()
       (updatedLeft, updatedMiddle, updatedRight)
     }
-    private def replaceMergedChildAndTakeFromRight(node: N, rightValue: A, rightSibling: N, index: Int, merged: Node[L, A])(implicit builder: NodeBuilder[Next[L], A]): (N, A, N) = {
+    private def replaceMergedChildAndTakeFromRight(node: N, rightValue: A, rightSibling: N, index: Int, merged: Node[L, A])(implicit builder: Builder): (N, A, N) = {
       val children = valueCount(node)
       val childIndex = index + children
       builder.internal(children)
