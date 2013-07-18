@@ -173,6 +173,7 @@ private[immutable] object implementation {
     def deleteAndMergeLeft(leftSibling: N, leftValue: A, node: N, a: A)(implicit builder: Builder): Option[Either[N, (N, A, N)]]
     def deleteAndMergeRight(node: N, rightValue: A, rightSibling: N, a: A)(implicit builder: Builder): Option[Either[N, (N, A, N)]]
 
+    def splitAtIndex(node: N, index: Int)(implicit builder: Builder): (NodeWithOps[A], NodeWithOps[A])
     def splitAtKey(node: N, key: A)(implicit builder: Builder): (NodeWithOps[A], NodeWithOps[A])
 
     def prepend(smallerTree: NodeWithOps[A], value: A, node: N)(implicit builder: Builder): Either[N, (N, A, N)]
@@ -296,12 +297,16 @@ private[immutable] object implementation {
 
     override def pathToHead(node: N, parent: PathNode[A]): PathNode[A] = new PathLeafNode(node, parent)
 
+    override def splitAtIndex(node: N, index: Int)(implicit builder: Builder): (NodeWithOps[A], NodeWithOps[A]) = {
+      val left = builder.allocCopy(node, 0, index).result()
+      val right = builder.allocCopy(node, index, node.length).result()
+      (NodeWithOps(left), NodeWithOps(right))
+    }
+
     override def splitAtKey(node: N, key: A)(implicit builder: Builder): (NodeWithOps[A], NodeWithOps[A]) = {
       val index = search(node, key)
       val splitPoint = if (index >= 0) index else (-index - 1)
-      val left = builder.allocCopy(node, 0, splitPoint).result()
-      val right = builder.allocCopy(node, splitPoint, node.length).result()
-      (NodeWithOps(left), NodeWithOps(right))
+      splitAtIndex(node, splitPoint)
     }
 
     override def prepend(prefix: NodeWithOps[A], value: A, right: N)(implicit builder: Builder): Either[N, (N, A, N)] = {
@@ -588,12 +593,36 @@ private[immutable] object implementation {
     override def pathToHead(node: N, parent: PathNode[A]): PathNode[A] =
       childOps.pathToHead(leftChild(node, 1), new PathInternalNode(node, parent))
 
+    override def splitAtIndex(node: N, index: Int)(implicit builder: Builder): (NodeWithOps[A], NodeWithOps[A]) = {
+      val children = valueCount(node)
+      var splitPoint = 1
+      var position = index
+      while (splitPoint <= children + 1) {
+        val childIndex = splitPoint + children
+        val child = childAt(node, childIndex)
+        val childSize = childOps.size(child)
+        if (position <= childSize) {
+          val (leftChildSplit, rightChildSplit) = childOps.splitAtIndex(child, position)(builder.down)
+          return mergeAfterSplit(node, splitPoint, leftChildSplit, rightChildSplit)
+        } else {
+          position -= childSize + 1
+        }
+        splitPoint += 1
+      }
+      throw new ArrayIndexOutOfBoundsException(index)
+    }
+
     override def splitAtKey(node: N, key: A)(implicit builder: Builder): (NodeWithOps[A], NodeWithOps[A]) = {
       val children = valueCount(node)
       val index = search(node, key)
       val splitPoint = if (index >= 0) index else -(index + 1)
       val child = childAt(node, splitPoint + children)
       val (leftChildSplit, rightChildSplit) = childOps.splitAtKey(child, key)(builder.down)
+      mergeAfterSplit(node, splitPoint, leftChildSplit, rightChildSplit)
+    }
+
+    private[this] def mergeAfterSplit(node: N, splitPoint: Int, leftChildSplit: NodeWithOps[A], rightChildSplit: NodeWithOps[A])(implicit builder: Builder): (NodeWithOps[A], NodeWithOps[A]) = {
+      val children = valueCount(node)
       val leftSplit = if (splitPoint == 1) leftChildSplit else {
         val leftChild = childAt(node, splitPoint + children - 1)
         childOps.append(leftChild, valueAt(node, splitPoint - 1), leftChildSplit)(builder.down) match {
@@ -615,7 +644,7 @@ private[immutable] object implementation {
             NodeWithOps(builder.recalculateSize().result())
         }
       }
-      val rightSplit = if (splitPoint == children + 1) rightChildSplit else {
+      val rightSplit = if (splitPoint == 1 + children) rightChildSplit else {
         val rightChild = childAt(node, splitPoint + children + 1)
         childOps.prepend(rightChildSplit, valueAt(node, splitPoint), rightChild)(builder.down) match {
           case Left(merged) if splitPoint == children =>
@@ -879,7 +908,48 @@ private[immutable] object implementation {
     override def lastOption = if (isEmpty) None else Some(last)
     override def tail = this - head
     override def init = this - last
+
+    override def take(n: Int) =
+      if (n <= 0) empty
+      else if (n >= size) this
+      else {
+        val (left, _) = ops.splitAtIndex(root, n)(ops.newBuilder)
+        new Root(left.node)(ordering, left.ops)
+      }
+
+    override def drop(n: Int) =
+      if (n <= 0) this
+      else if (n >= size) empty
+      else {
+        val (_, right) = ops.splitAtIndex(root, n)(ops.newBuilder)
+        new Root(right.node)(ordering, right.ops)
+      }
+
+    override def splitAt(n: Int) =
+      if (n <= 0) (empty, this)
+      else if (n >= size) (this, empty)
+      else {
+        val (left, right) = ops.splitAtIndex(root, n)(ops.newBuilder)
+        (new Root(left.node)(ordering, left.ops),
+          new Root(right.node)(ordering, right.ops))
+      }
+
+    override def dropRight(n: Int) = take(size - n)
+    override def takeRight(n: Int) = drop(size - n)
+
+    private[this] def countWhile(p: A => Boolean): Int = {
+      var result = 0
+      val it = iterator
+      while (it.hasNext && p(it.next())) result += 1
+      result
+    }
+
+    override def dropWhile(p: A => Boolean) = drop(countWhile(p))
+    override def takeWhile(p: A => Boolean) = take(countWhile(p))
+    override def span(p: A => Boolean) = splitAt(countWhile(p))
   }
+
+  def TODO = throw new RuntimeException("TODO")
 
   sealed trait PathNode[A] {
     def current: A
@@ -887,20 +957,20 @@ private[immutable] object implementation {
     def hasNext: Boolean
   }
 
-  private final class PathLeafNode[A](node: Node[Leaf, A], parent: PathNode[A])(implicit ops: NodeOps[Leaf, A]) extends PathNode[A] {
+  private final class PathLeafNode[A](node: Node[Leaf, A], parent: PathNode[A]) extends PathNode[A] {
     private[this] var position: Int = 0
-    private[this] val valueCount = ops.valueCount(node)
+    //private[this] val valueCount = ops.valueCount(node)
 
-    def current: A = ops.valueAt(node, position)
+    def current: A = node(position).asInstanceOf[A] //ops.valueAt(node, position)
     def next: PathNode[A] =
-      if (position + 1 < valueCount) {
+      if (position + 1 < node.length) {
         position += 1
         this
       } else {
         parent.next
       }
 
-    def hasNext: Boolean = position + 1 < valueCount || ((parent ne null) && parent.hasNext)
+    def hasNext: Boolean = position + 1 < node.length || ((parent ne null) && parent.hasNext)
   }
 
   private final class PathInternalNode[L <: Next[_], A](node: Node[L, A], parent: PathNode[A])(implicit ops: NodeOps[L, A]) extends PathNode[A] {
