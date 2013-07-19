@@ -111,15 +111,7 @@ object BTreeThyme {
     (p1, p2) <- parameters.zip(parameters.tail)
   } {
     val xs = BTreeThyme.shuffled.take(size)
-    th.pbenchOff(s"insert $size shuffled values")(BTree(xs: _*)(implicitly, p1).size, ftitle = s"btree L=${p1.minLeafValues},I=${p1.minInternalValues}")(BTree(xs: _*)(implicitly, p2).size, htitle = s"btree L=${p2.minLeafValues},I=${p2.minInternalValues}")
-  }
-
-  def insertShuffledVaryingOrder2(sizes: Seq[Int] = DefaultSizes, parameters: Seq[BTree.Parameters] = DefaultParameters): Unit = for {
-    size <- sizes
-    p1 <- parameters
-  } {
-    val xs = BTreeThyme.shuffled.take(size)
-    th.pbench(BTree(xs: _*)(implicitly, p1).size, title = s"btree L=${p1.minLeafValues},I=${p1.minInternalValues},N=${size}")
+    th.pbenchOff(s"insert $size shuffled values")(BTree.withParameters[Integer](implicitly, p1).++(xs).size, ftitle = s"btree L=${p1.minLeafValues},I=${p1.minInternalValues}")(BTree.withParameters[Integer](implicitly, p2).++(xs).size, htitle = s"btree L=${p2.minLeafValues},I=${p2.minInternalValues}")
   }
 
   private def simpleBench[A](label: String, f: SortedSet[Integer] => A): Unit = DefaultSizes foreach { i =>

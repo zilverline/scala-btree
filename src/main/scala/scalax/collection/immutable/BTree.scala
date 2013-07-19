@@ -2,7 +2,8 @@ package scalax.collection.immutable
 
 import java.util.Arrays
 import java.util.Comparator
-import scala.collection.mutable.Builder
+import scala.collection.generic.ImmutableSortedSetFactory
+import scala.collection.mutable.{ Builder, SetBuilder }
 import scala.collection.immutable.SortedSet
 import scala.collection.SortedSetLike
 import scala.annotation.tailrec
@@ -10,15 +11,15 @@ import scala.annotation.tailrec
 trait BTree[A] extends SortedSet[A] with SortedSetLike[A, BTree[A]] with Serializable {
   override def empty: BTree[A] = BTree.empty[A]
 }
-object BTree {
+object BTree extends ImmutableSortedSetFactory[BTree] {
   import implementation._
 
   case class Parameters(minLeafValues: Int = 16, minInternalValues: Int = 16)
 
   val DefaultParameters = Parameters()
 
-  def apply[A: Ordering](elements: A*)(implicit parameters: Parameters = DefaultParameters): BTree[A] = elements.foldLeft(BTree.empty[A])(_ + _)
-  def empty[A: Ordering](implicit parameters: Parameters = DefaultParameters): BTree[A] = new Root[Leaf, A](Array.empty[AnyRef].asInstanceOf[Node[Leaf, A]])(implicitly, LeafOperations)
+  def empty[A: Ordering]: BTree[A] = new Root[Leaf, A](Array.empty[AnyRef].asInstanceOf[Node[Leaf, A]])(implicitly, LeafOperations(implicitly, DefaultParameters))
+  def withParameters[A: Ordering](implicit parameters: Parameters = DefaultParameters): BTree[A] = new Root[Leaf, A](Array.empty[AnyRef].asInstanceOf[Node[Leaf, A]])(implicitly, LeafOperations)
 }
 
 private[immutable] object implementation {
@@ -164,7 +165,7 @@ private[immutable] object implementation {
     def isEmpty(node: N): Boolean
 
     def contains(node: N, a: A): Boolean
-    def insert(node: N, a: A)(implicit builder: Builder): Either[N, (N, A, N)]
+    def insert(node: N, a: A, overwrite: Boolean)(implicit builder: Builder): Either[N, (N, A, N)]
 
     def pathToHead(node: N, parent: PathNode[A] = null): PathNode[A]
 
@@ -211,10 +212,10 @@ private[immutable] object implementation {
     override def isEmpty(node: N): Boolean = size(node) == 0
     override def contains(node: N, a: A): Boolean = search(node, a) >= 0
 
-    override def insert(node: N, a: A)(implicit builder: Builder): Either[N, (N, A, N)] = {
+    override def insert(node: N, a: A, overwrite: Boolean)(implicit builder: Builder): Either[N, (N, A, N)] = {
       val index = search(node, a)
       if (index >= 0) {
-        Left(builder.allocCopy(node).updateValue(index, a).result())
+        if (overwrite) Left(builder.allocCopy(node).updateValue(index, a).result()) else Left(node)
       } else {
         val insertionPoint = -index - 1
         if (valueCount(node) < maxValues) {
@@ -405,16 +406,16 @@ private[immutable] object implementation {
       }
     }
 
-    override def insert(node: N, a: A)(implicit builder: Builder): Either[N, (N, A, N)] = {
+    override def insert(node: N, a: A, overwrite: Boolean)(implicit builder: Builder): Either[N, (N, A, N)] = {
       val index = search(node, a)
       if (index >= 0) {
-        Left(builder.allocCopy(node).updateValue(index, a).result())
+        if (overwrite) Left(builder.allocCopy(node).updateValue(index, a).result()) else Left(node)
       } else {
         val children = valueCount(node)
         val insertionPoint = -index - 1
         val childIndex = insertionPoint + children
         val child = childAt(node, childIndex)
-        childUpdatedOrSplit(node, insertionPoint, childOps.insert(child, a)(builder.down))
+        childUpdatedOrSplit(node, insertionPoint, childOps.insert(child, a, overwrite)(builder.down))
       }
     }
 
@@ -864,7 +865,7 @@ private[immutable] object implementation {
     extends BTree[A] with Serializable {
     override def +(a: A) = {
       val builder = ops.newBuilder
-      ops.insert(root, a)(builder) match {
+      ops.insert(root, a, overwrite = false)(builder) match {
         case Left(node) => new Root(node)
         case Right((left, middle, right)) =>
           val rootBuilder = builder.up
@@ -876,6 +877,7 @@ private[immutable] object implementation {
           new Root(rootBuilder.result())
       }
     }
+
     override def -(a: A): BTree[A] = {
       ops.deleteFromRoot(root, a)(ops.newBuilder) match {
         case None                => this
@@ -978,12 +980,12 @@ private[immutable] object implementation {
     private[this] val valueCount = ops.valueCount(node)
     private[this] val valueAndChildCount = 2 * valueCount + 1
 
-    def current: A = ops.valueAt(node, 1 + (position - 1) / 2)
+    def current: A = ops.valueAt(node, 1 + ((position - 1) >> 1))
     def next: PathNode[A] =
       if (position + 1 < valueAndChildCount) {
         position += 1
-        if (position % 2 == 0)
-          ops.childOps.pathToHead(ops.childAt(node, 1 + valueCount + position / 2), this)
+        if ((position & 1) == 0)
+          ops.childOps.pathToHead(ops.childAt(node, 1 + valueCount + (position >> 1)), this)
         else
           this
       } else {
