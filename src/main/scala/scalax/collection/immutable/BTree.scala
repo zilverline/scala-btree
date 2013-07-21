@@ -2,14 +2,16 @@ package scalax.collection.immutable
 
 import java.util.Arrays
 import java.util.Comparator
-import scala.collection.generic.ImmutableSortedSetFactory
-import scala.collection.mutable.{ Builder, SetBuilder }
-import scala.collection.immutable.SortedSet
 import scala.collection.SortedSetLike
-import scala.annotation.tailrec
+import scala.collection.generic.ImmutableSortedSetFactory
+import scala.collection.immutable.SortedSet
+import scala.collection.mutable.{ Builder, SetBuilder }
 
 trait BTree[A] extends SortedSet[A] with SortedSetLike[A, BTree[A]] with Serializable {
   override def empty: BTree[A] = BTree.empty[A]
+
+  // Should be an override in Scala 2.11
+  def iteratorFrom(start: A): Iterator[A]
 }
 object BTree extends ImmutableSortedSetFactory[BTree] {
   import implementation._
@@ -19,7 +21,7 @@ object BTree extends ImmutableSortedSetFactory[BTree] {
   val DefaultParameters = Parameters()
 
   def empty[A: Ordering]: BTree[A] = new Root[Leaf, A](Array.empty[AnyRef].asInstanceOf[Node[Leaf, A]])(implicitly, LeafOperations(implicitly, DefaultParameters))
-  def withParameters[A: Ordering](implicit parameters: Parameters = DefaultParameters): BTree[A] = new Root[Leaf, A](Array.empty[AnyRef].asInstanceOf[Node[Leaf, A]])(implicitly, LeafOperations)
+  def withParameters[A: Ordering](parameters: Parameters): BTree[A] = new Root[Leaf, A](Array.empty[AnyRef].asInstanceOf[Node[Leaf, A]])(implicitly, LeafOperations(implicitly, parameters))
 }
 
 private[immutable] object implementation {
@@ -168,6 +170,7 @@ private[immutable] object implementation {
     def insert(node: N, a: A, overwrite: Boolean)(implicit builder: Builder): Either[N, (N, A, N)]
 
     def pathToHead(node: N, parent: PathNode[A] = null): PathNode[A]
+    def pathToKey(node: N, key: A, parent: PathNode[A] = null): PathNode[A]
 
     def deleteFromRoot(node: N, a: A)(implicit builder: Builder): Option[Either[N, ChildNode]]
     def rebalance(left: N, right: N)(implicit builder: Builder): Either[N, (N, A, N)]
@@ -296,7 +299,15 @@ private[immutable] object implementation {
       }
     }
 
-    override def pathToHead(node: N, parent: PathNode[A]): PathNode[A] = new PathLeafNode(node, parent)
+    override def pathToHead(node: N, parent: PathNode[A]): PathNode[A] =
+      if (isEmpty(node)) null else new PathLeafNode(node, 0, parent)
+
+    override def pathToKey(node: N, key: A, parent: PathNode[A]): PathNode[A] = {
+      val index = search(node, key)
+      val startPoint = if (index >= 0) index else -(index + 1)
+      if (startPoint >= valueCount(node)) null
+      else new PathLeafNode(node, startPoint, parent)
+    }
 
     override def splitAtIndex(node: N, index: Int)(implicit builder: Builder): (NodeWithOps[A], NodeWithOps[A]) = {
       val left = builder.allocCopy(node, 0, index).result()
@@ -592,7 +603,20 @@ private[immutable] object implementation {
     }
 
     override def pathToHead(node: N, parent: PathNode[A]): PathNode[A] =
-      childOps.pathToHead(leftChild(node, 1), new PathInternalNode(node, parent))
+      childOps.pathToHead(leftChild(node, 1), new PathInternalNode(node, 0, parent))
+
+    override def pathToKey(node: N, key: A, parent: PathNode[A]): PathNode[A] = {
+      val children = valueCount(node)
+      val index = search(node, key)
+      if (index >= 0) new PathInternalNode(node, (index - 1) * 2 + 1, parent)
+      else {
+        val startPoint = -(index + 1)
+        val child = childAt(node, startPoint + children)
+        val parentPath = new PathInternalNode(node, (startPoint - 1) * 2, parent)
+        val childPath = childOps.pathToKey(child, key, parentPath)
+        if (childPath ne null) childPath else parentPath.next
+      }
+    }
 
     override def splitAtIndex(node: N, index: Int)(implicit builder: Builder): (NodeWithOps[A], NodeWithOps[A]) = {
       val children = valueCount(node)
@@ -888,7 +912,10 @@ private[immutable] object implementation {
     override def isEmpty: Boolean = ops.isEmpty(root)
     override def size: Int = ops.size(root)
     override def contains(a: A): Boolean = ops.contains(root, a)
-    override def iterator: Iterator[A] = new BTreeIterator(root)
+
+    override def iterator: Iterator[A] = new BTreeIterator(root, ops.pathToHead(root))
+    override def iteratorFrom(start: A): Iterator[A] = new BTreeIterator(root, ops.pathToKey(root, start))
+
     override def rangeImpl(from: Option[A], until: Option[A]): BTree[A] = (from, until) match {
       case (None, None)      =>
         this
@@ -956,31 +983,32 @@ private[immutable] object implementation {
   sealed trait PathNode[A] {
     def current: A
     def next: PathNode[A]
-    def hasNext: Boolean
   }
 
-  private final class PathLeafNode[A](node: Node[Leaf, A], parent: PathNode[A]) extends PathNode[A] {
-    private[this] var position: Int = 0
-    //private[this] val valueCount = ops.valueCount(node)
+  private final class PathLeafNode[A](node: Node[Leaf, A], initialPosition: Int, parent: PathNode[A])(implicit ops: NodeOps[Leaf, A]) extends PathNode[A] {
+    private[this] var position = initialPosition
+    private[this] val valueCount = ops.valueCount(node)
 
-    def current: A = node(position).asInstanceOf[A] //ops.valueAt(node, position)
+    def current: A = ops.valueAt(node, position)
+
     def next: PathNode[A] =
-      if (position + 1 < node.length) {
+      if (position + 1 < valueCount) {
         position += 1
         this
-      } else {
+      } else if (parent ne null) {
         parent.next
+      } else {
+        null
       }
-
-    def hasNext: Boolean = position + 1 < node.length || ((parent ne null) && parent.hasNext)
   }
 
-  private final class PathInternalNode[L <: Next[_], A](node: Node[L, A], parent: PathNode[A])(implicit ops: NodeOps[L, A]) extends PathNode[A] {
-    private[this] var position: Int = 0
+  private final class PathInternalNode[L <: Next[_], A](node: Node[L, A], initialPosition: Int, parent: PathNode[A])(implicit ops: NodeOps[L, A]) extends PathNode[A] {
+    private[this] var position = initialPosition
     private[this] val valueCount = ops.valueCount(node)
     private[this] val valueAndChildCount = 2 * valueCount + 1
 
     def current: A = ops.valueAt(node, 1 + ((position - 1) >> 1))
+
     def next: PathNode[A] =
       if (position + 1 < valueAndChildCount) {
         position += 1
@@ -988,23 +1016,32 @@ private[immutable] object implementation {
           ops.childOps.pathToHead(ops.childAt(node, 1 + valueCount + (position >> 1)), this)
         else
           this
-      } else {
+      } else if (parent ne null) {
         parent.next
+      } else {
+        null
       }
-
-    def hasNext: Boolean = position + 1 < valueAndChildCount || ((parent ne null) && parent.hasNext)
   }
 
-  private final class BTreeIterator[L <: Level, A](root: Node[L, A])(implicit ops: NodeOps[L, A]) extends Iterator[A] {
+  private final class BTreeIterator[L <: Level, A](root: Node[L, A], initialPath: PathNode[A] = null)(implicit ops: NodeOps[L, A]) extends Iterator[A] {
     private[this] var path: PathNode[A] = _
-    private[this] var nextAvailable: Boolean = !ops.isEmpty(root)
+    private[this] var nextAvailable: Boolean = _
+    private[this] var next: AnyRef = _
+
+    tryNext(initialPath)
 
     override def hasNext: Boolean = nextAvailable
     override def next(): A = {
-      if (!hasNext) throw new NoSuchElementException("next on empty iterator")
-      path = if (path eq null) ops.pathToHead(root) else path.next
-      nextAvailable = path.hasNext
-      path.current
+      if (!nextAvailable) throw new NoSuchElementException("next on empty iterator")
+      val result = next.asInstanceOf[A]
+      tryNext(path.next)
+      result
+    }
+
+    private[this] def tryNext(nextPath: PathNode[A]): Unit = {
+      path = nextPath
+      nextAvailable = nextPath ne null
+      next = if (nextAvailable) path.current.asInstanceOf[AnyRef] else null
     }
   }
 }

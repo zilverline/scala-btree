@@ -111,7 +111,7 @@ object BTreeThyme {
     (p1, p2) <- parameters.zip(parameters.tail)
   } {
     val xs = BTreeThyme.shuffled.take(size)
-    th.pbenchOff(s"insert $size shuffled values")(BTree.withParameters[Integer](implicitly, p1).++(xs).size, ftitle = s"btree L=${p1.minLeafValues},I=${p1.minInternalValues}")(BTree.withParameters[Integer](implicitly, p2).++(xs).size, htitle = s"btree L=${p2.minLeafValues},I=${p2.minInternalValues}")
+    th.pbenchOff(s"insert $size shuffled values")(BTree.withParameters[Integer](p1).++(xs).size, ftitle = s"btree L=${p1.minLeafValues},I=${p1.minInternalValues}")(BTree.withParameters[Integer](p2).++(xs).size, htitle = s"btree L=${p2.minLeafValues},I=${p2.minInternalValues}")
   }
 
   private def simpleBench[A](label: String, f: SortedSet[Integer] => A): Unit = DefaultSizes foreach { i =>
