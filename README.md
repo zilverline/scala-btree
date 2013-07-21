@@ -23,7 +23,7 @@ $ SBT_OPTS="-Xms1G -Xmx1G -XX:+UseCompressedOops -XX:+UseSerialGC -XX:+TieredCom
 Then run a benchmark:
 
 ```
-scala> scalax.collection.immutable.BTreeThyme.insertShuffled()
+scala> scalax.collection.immutable.BTreeSetThyme.insertShuffled()
 ```
 
 The benchmark make use of the excellent [Thyme](https://github.com/Ichoran/thyme) library.

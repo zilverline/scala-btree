@@ -7,21 +7,21 @@ import scala.collection.generic.ImmutableSortedSetFactory
 import scala.collection.immutable.SortedSet
 import scala.collection.mutable.{ Builder, SetBuilder }
 
-trait BTree[A] extends SortedSet[A] with SortedSetLike[A, BTree[A]] with Serializable {
-  override def empty: BTree[A] = BTree.empty[A]
+trait BTreeSet[A] extends SortedSet[A] with SortedSetLike[A, BTreeSet[A]] with Serializable {
+  override def empty: BTreeSet[A] = BTreeSet.empty[A]
 
   // Should be an override in Scala 2.11
   def iteratorFrom(start: A): Iterator[A]
 }
-object BTree extends ImmutableSortedSetFactory[BTree] {
+object BTreeSet extends ImmutableSortedSetFactory[BTreeSet] {
   import implementation._
 
   case class Parameters(minLeafValues: Int = 16, minInternalValues: Int = 16)
 
   val DefaultParameters = Parameters()
 
-  def empty[A: Ordering]: BTree[A] = new Root[Leaf, A](Array.empty[AnyRef].asInstanceOf[Node[Leaf, A]])(implicitly, LeafOperations(implicitly, DefaultParameters))
-  def withParameters[A: Ordering](parameters: Parameters): BTree[A] = new Root[Leaf, A](Array.empty[AnyRef].asInstanceOf[Node[Leaf, A]])(implicitly, LeafOperations(implicitly, parameters))
+  def empty[A: Ordering]: BTreeSet[A] = new Root[Leaf, A](Array.empty[AnyRef].asInstanceOf[Node[Leaf, A]])(implicitly, LeafOperations(implicitly, DefaultParameters))
+  def withParameters[A: Ordering](parameters: Parameters): BTreeSet[A] = new Root[Leaf, A](Array.empty[AnyRef].asInstanceOf[Node[Leaf, A]])(implicitly, LeafOperations(implicitly, parameters))
 }
 
 private[immutable] object implementation {
@@ -148,7 +148,7 @@ private[immutable] object implementation {
     type Builder = NodeBuilder[L, A]
 
     def level: Int
-    def parameters: BTree.Parameters
+    def parameters: BTreeSet.Parameters
     def ordering: Ordering[A]
 
     def newBuilder: Builder = new NodeBuilder[L, A]
@@ -194,8 +194,8 @@ private[immutable] object implementation {
    * The length of the array is equal to the number of stored values.
    * There is no additional overhead (counts, child pointers).
    */
-  implicit def LeafOperations[A: Ordering](implicit parameters: BTree.Parameters) = new LeafOperations()
-  final class LeafOperations[A]()(implicit val ordering: Ordering[A], val parameters: BTree.Parameters) extends NodeOps[Leaf, A] {
+  implicit def LeafOperations[A: Ordering](implicit parameters: BTreeSet.Parameters) = new LeafOperations()
+  final class LeafOperations[A]()(implicit val ordering: Ordering[A], val parameters: BTreeSet.Parameters) extends NodeOps[Leaf, A] {
     override type PreviousLevel = Nothing
 
     override def level = 0
@@ -886,7 +886,7 @@ private[immutable] object implementation {
   }
 
   class Root[L <: Level, A](val root: Node[L, A])(implicit override val ordering: Ordering[A], val ops: NodeOps[L, A])
-    extends BTree[A] with Serializable {
+    extends BTreeSet[A] with Serializable {
     override def +(a: A) = {
       val builder = ops.newBuilder
       ops.insert(root, a, overwrite = false)(builder) match {
@@ -902,7 +902,7 @@ private[immutable] object implementation {
       }
     }
 
-    override def -(a: A): BTree[A] = {
+    override def -(a: A): BTreeSet[A] = {
       ops.deleteFromRoot(root, a)(ops.newBuilder) match {
         case None                => this
         case Some(Left(updated)) => new Root(updated)
@@ -916,7 +916,7 @@ private[immutable] object implementation {
     override def iterator: Iterator[A] = new BTreeIterator(root, ops.pathToHead(root))
     override def iteratorFrom(start: A): Iterator[A] = new BTreeIterator(root, ops.pathToKey(root, start))
 
-    override def rangeImpl(from: Option[A], until: Option[A]): BTree[A] = (from, until) match {
+    override def rangeImpl(from: Option[A], until: Option[A]): BTreeSet[A] = (from, until) match {
       case (None, None)      =>
         this
       case (Some(key), None) =>
@@ -928,7 +928,7 @@ private[immutable] object implementation {
       case (from, until)     =>
         rangeImpl(from, None).rangeImpl(None, until)
     }
-    override def stringPrefix: String = "BTree"
+    override def stringPrefix: String = "BTreeSet"
 
     // Optimized implementations of various methods.
     override def head = ops.head(root)

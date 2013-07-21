@@ -5,10 +5,10 @@ import org.scalacheck.Arbitrary.arbitrary
 import org.specs2.matcher.Parameters
 import scala.collection.immutable.TreeSet
 
-class BTreeSpec extends org.specs2.Specification with org.specs2.ScalaCheck {
-  implicit val parameters = BTree.Parameters(minLeafValues = 2, minInternalValues = 2)
+class BTreeSetSpec extends org.specs2.Specification with org.specs2.ScalaCheck {
+  implicit val parameters = BTreeSet.Parameters(minLeafValues = 2, minInternalValues = 2)
 
-  private def tree[A: Ordering](a: A*): BTree[A] = a.foldLeft(BTree.withParameters[A](parameters))(_ + _)
+  private def tree[A: Ordering](a: A*): BTreeSet[A] = a.foldLeft(BTreeSet.withParameters[A](parameters))(_ + _)
 
   def is = s2"""
 In-memory B-Tree specification
@@ -47,11 +47,11 @@ A non-empty B-Tree should
 
   implicit val params = Parameters(minTestsOk = 1000, minSize = 0, maxSize = 100, workers = Runtime.getRuntime().availableProcessors())
 
-  implicit def GenTree[T: Arbitrary: Ordering]: Arbitrary[BTree[T]] = Arbitrary(for {
+  implicit def GenTree[T: Arbitrary: Ordering]: Arbitrary[BTreeSet[T]] = Arbitrary(for {
     elements <- Gen.listOf(arbitrary[T])
   } yield tree(elements: _*))
 
-  def empty = BTree.empty[Int]
+  def empty = BTreeSet.empty[Int]
   def singleton = tree(1)
   def pair = tree(2, 1)
 
@@ -82,10 +82,10 @@ A non-empty B-Tree should
     val subject = tree(elements: _*)
     subject.iteratorFrom(key).toVector must_== subject.from(key).iterator.toVector
   }
-  def headTailIdentity = Prop.forAll { subject: BTree[Int] => subject.nonEmpty ==> {
+  def headTailIdentity = Prop.forAll { subject: BTreeSet[Int] => subject.nonEmpty ==> {
     subject must_== (subject.tail + subject.head)
   }}
-  def initLastIdentity = Prop.forAll { subject: BTree[Int] => subject.nonEmpty ==> {
+  def initLastIdentity = Prop.forAll { subject: BTreeSet[Int] => subject.nonEmpty ==> {
     subject must_== (subject.init + subject.last)
   }}
 
