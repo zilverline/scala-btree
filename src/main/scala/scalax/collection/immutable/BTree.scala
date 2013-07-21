@@ -963,6 +963,13 @@ private[immutable] object implementation {
           new Root(right.node)(ordering, right.ops))
       }
 
+    override def slice(from: Int, until: Int) = {
+      if (from >= until || from >= size) empty
+      else if (from <= 0) take(until)
+      else if (until >= size) drop(from)
+      else drop(from).take(until - from)
+    }
+
     override def dropRight(n: Int) = take(size - n)
     override def takeRight(n: Int) = drop(size - n)
 

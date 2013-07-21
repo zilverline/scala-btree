@@ -38,6 +38,7 @@ A B-Tree should
   support drop                                       $drop
   take/drop identity                                 $takeDropIdentity
   support splitAt                                    $splitAt
+  support slice                                      $slice
 
 A non-empty B-Tree should
   not contain deleted element                        $notContainDeletedElement
@@ -150,5 +151,14 @@ A non-empty B-Tree should
       val subject = tree(elements: _*)
       val (left, right) = subject.splitAt(n)
       (left must_== subject.take(n)) and (right must_== subject.drop(n))
+  }
+
+  def slice = Prop.forAll(for {
+    elements <- arbitrary[List[Int]]
+    from <- Gen.choose(-1, elements.size + 1)
+    until <- Gen.choose(-1, elements.size + 1)
+  } yield (elements, from, until)) {
+    case (elements, from, until) =>
+      tree(elements: _*).slice(from, until).toVector must_== TreeSet(elements: _*).slice(from, until).toVector
   }
 }

@@ -125,4 +125,10 @@ object BTreeThyme {
   def benchTail() = simpleBench("tail", _.tail)
   def benchLast() = simpleBench("last", _.last)
   def benchInit() = simpleBench("init", _.init)
+
+  def benchSlice() = simpleBench("slice", { set =>
+    val start = set.size / 3
+    val end = 2 * start
+    set.slice(start, end)
+  })
 }
