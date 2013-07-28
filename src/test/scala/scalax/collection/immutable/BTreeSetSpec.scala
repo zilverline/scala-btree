@@ -68,6 +68,15 @@ A non-empty B-Tree should
     val subject = tree(elements: _*)
     elements.forall(subject.contains)
   }
+  def ignoreAlreadyContainedElements = Prop.forAll { elements: List[Int] =>
+    val subject = tree(elements: _*)
+    elements.foldLeft(subject)(_ + _) must beTheSameAs(subject)
+  }
+  def ignoreDeletionOfElementsNoInTreeSet = Prop.forAll { (elements: List[Int], toDelete: Int) => {
+    val subject = tree(elements: _*)
+    !subject.contains(toDelete) ==> ((subject - toDelete) must beTheSameAs(subject))
+  }}
+
   def containAllDistinctElements = Prop.forAll { elements: List[Int] =>
     tree(elements: _*) must have size(elements.distinct.size)
   }

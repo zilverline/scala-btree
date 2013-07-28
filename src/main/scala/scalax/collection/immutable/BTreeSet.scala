@@ -34,6 +34,9 @@ private[immutable] object implementation {
   type Tagged[U] = { type Tag = U }
   type @@[T, U] = T with Tagged[U]
 
+  /* Marker type to indicate a value can be null. For documentation only. */
+  type Nullable[A >: Null] = A
+
   /* Nodes are raw arrays (for memory efficiency) but tagged for compile time checking. */
   type Node[L <: Level, A] = Array[AnyRef] @@ (L, A)
 
@@ -167,15 +170,15 @@ private[immutable] object implementation {
     def isEmpty(node: N): Boolean
 
     def contains(node: N, a: A): Boolean
-    def insert(node: N, a: A, overwrite: Boolean)(implicit builder: Builder): Either[N, (N, A, N)]
+    def insert(node: N, a: A, overwrite: Boolean)(implicit builder: Builder): Nullable[Either[N, (N, A, N)]]
 
-    def pathToHead(node: N, parent: PathNode[A] = null): PathNode[A]
-    def pathToKey(node: N, key: A, parent: PathNode[A] = null): PathNode[A]
+    def pathToHead(node: N, parent: Nullable[PathNode[A]] = null): Nullable[PathNode[A]]
+    def pathToKey(node: N, key: A, parent: Nullable[PathNode[A]] = null): Nullable[PathNode[A]]
 
-    def deleteFromRoot(node: N, a: A)(implicit builder: Builder): Option[Either[N, ChildNode]]
+    def deleteFromRoot(node: N, a: A)(implicit builder: Builder): Nullable[Either[N, ChildNode]]
     def rebalance(left: N, right: N)(implicit builder: Builder): Either[N, (N, A, N)]
-    def deleteAndMergeLeft(leftSibling: N, leftValue: A, node: N, a: A)(implicit builder: Builder): Option[Either[N, (N, A, N)]]
-    def deleteAndMergeRight(node: N, rightValue: A, rightSibling: N, a: A)(implicit builder: Builder): Option[Either[N, (N, A, N)]]
+    def deleteAndMergeLeft(leftSibling: N, leftValue: A, node: N, a: A)(implicit builder: Builder): Nullable[Either[N, (N, A, N)]]
+    def deleteAndMergeRight(node: N, rightValue: A, rightSibling: N, a: A)(implicit builder: Builder): Nullable[Either[N, (N, A, N)]]
 
     def splitAtIndex(node: N, index: Int)(implicit builder: Builder): (NodeWithOps[A], NodeWithOps[A])
     def splitAtKey(node: N, key: A)(implicit builder: Builder): (NodeWithOps[A], NodeWithOps[A])
@@ -215,10 +218,10 @@ private[immutable] object implementation {
     override def isEmpty(node: N): Boolean = size(node) == 0
     override def contains(node: N, a: A): Boolean = search(node, a) >= 0
 
-    override def insert(node: N, a: A, overwrite: Boolean)(implicit builder: Builder): Either[N, (N, A, N)] = {
+    override def insert(node: N, a: A, overwrite: Boolean)(implicit builder: Builder): Nullable[Either[N, (N, A, N)]] = {
       val index = search(node, a)
       if (index >= 0) {
-        if (overwrite) Left(builder.allocCopy(node).updateValue(index, a).result()) else Left(node)
+        if (overwrite) Left(builder.allocCopy(node).updateValue(index, a).result()) else null
       } else {
         val insertionPoint = -index - 1
         if (valueCount(node) < maxValues) {
@@ -244,10 +247,10 @@ private[immutable] object implementation {
       }
     }
 
-    override def deleteFromRoot(node: N, a: A)(implicit builder: Builder): Option[Either[N, ChildNode]] = {
+    override def deleteFromRoot(node: N, a: A)(implicit builder: Builder): Nullable[Either[N, ChildNode]] = {
       val index = search(node, a)
-      if (index < 0) None
-      else Some(Left(valueDeleted(node, index)))
+      if (index < 0) null
+      else Left(valueDeleted(node, index))
     }
 
     override def rebalance(left: N, right: N)(implicit builder: Builder): Either[N, (N, A, N)] = {
@@ -261,48 +264,48 @@ private[immutable] object implementation {
             (left, valueAt(right, 0), valueDeleted(right, 0)))
     }
 
-    override def deleteAndMergeLeft(leftSibling: N, leftValue: A, node: N, a: A)(implicit builder: Builder): Option[Either[N, (N, A, N)]] = {
+    override def deleteAndMergeLeft(leftSibling: N, leftValue: A, node: N, a: A)(implicit builder: Builder): Nullable[Either[N, (N, A, N)]] = {
       val index = search(node, a)
       if (index < 0)
-        None
+        null
       else if (valueCount(node) > minValues) {
-        Some(Right((leftSibling, leftValue, valueDeleted(node, index))))
+        Right((leftSibling, leftValue, valueDeleted(node, index)))
       } else if (valueCount(leftSibling) > minValues) {
         val left = valueDeleted(leftSibling, leftSibling.length - 1)
         val middle = valueAt(leftSibling, leftSibling.length - 1)
         val right = builder.leaf(node.length).insertValue(leftValue).copyDeleted(node, index).result()
-        Some(Right((left, middle, right)))
+        Right((left, middle, right))
       } else {
-        Some(Left(builder.leaf(maxValues)
+        Left(builder.leaf(maxValues)
           .copy(leftSibling)
           .insertValue(leftValue)
-          .copyDeleted(node, index).result()))
+          .copyDeleted(node, index).result())
       }
     }
 
-    override def deleteAndMergeRight(node: N, rightValue: A, rightSibling: N, a: A)(implicit builder: Builder): Option[Either[N, (N, A, N)]] = {
+    override def deleteAndMergeRight(node: N, rightValue: A, rightSibling: N, a: A)(implicit builder: Builder): Nullable[Either[N, (N, A, N)]] = {
       val index = search(node, a)
       if (index < 0)
-        None
+        null
       else if (valueCount(node) > minValues) {
-        Some(Right((valueDeleted(node, index), rightValue, rightSibling)))
+        Right((valueDeleted(node, index), rightValue, rightSibling))
       } else if (valueCount(rightSibling) > minValues) {
         val left = builder.leaf(node.length).copyDeleted(node, index).insertValue(rightValue).result()
         val middle = valueAt(rightSibling, 0)
         val right = valueDeleted(rightSibling, 0)
-        Some(Right((left, middle, right)))
+        Right((left, middle, right))
       } else {
-        Some(Left(builder.leaf(maxValues)
+        Left(builder.leaf(maxValues)
           .copyDeleted(node, index)
           .insertValue(rightValue)
-          .copy(rightSibling).result()))
+          .copy(rightSibling).result())
       }
     }
 
-    override def pathToHead(node: N, parent: PathNode[A]): PathNode[A] =
+    override def pathToHead(node: N, parent: Nullable[PathNode[A]]): Nullable[PathNode[A]] =
       if (isEmpty(node)) null else new PathLeafNode(node, 0, parent)
 
-    override def pathToKey(node: N, key: A, parent: PathNode[A]): PathNode[A] = {
+    override def pathToKey(node: N, key: A, parent: Nullable[PathNode[A]]): Nullable[PathNode[A]] = {
       val index = search(node, key)
       val startPoint = if (index >= 0) index else -(index + 1)
       if (startPoint >= valueCount(node)) null
@@ -417,10 +420,10 @@ private[immutable] object implementation {
       }
     }
 
-    override def insert(node: N, a: A, overwrite: Boolean)(implicit builder: Builder): Either[N, (N, A, N)] = {
+    override def insert(node: N, a: A, overwrite: Boolean)(implicit builder: Builder): Nullable[Either[N, (N, A, N)]] = {
       val index = search(node, a)
       if (index >= 0) {
-        if (overwrite) Left(builder.allocCopy(node).updateValue(index, a).result()) else Left(node)
+        if (overwrite) Left(builder.allocCopy(node).updateValue(index, a).result()) else null
       } else {
         val children = valueCount(node)
         val insertionPoint = -index - 1
@@ -430,10 +433,12 @@ private[immutable] object implementation {
       }
     }
 
-    private def childUpdatedOrSplit(node: N, insertionPoint: Int, child: Either[ChildNode, (ChildNode, A, ChildNode)])(implicit builder: Builder): Either[N, (N, A, N)] = {
+    private def childUpdatedOrSplit(node: N, insertionPoint: Int, child: Nullable[Either[ChildNode, (ChildNode, A, ChildNode)]])(implicit builder: Builder): Either[N, (N, A, N)] = {
       val children = valueCount(node)
       val childIndex = insertionPoint + children
       child match {
+        case null =>
+          null
         case Left(updatedChild) =>
           val originalChild = childAt(node, childIndex)
           val sizeChange = childOps.size(updatedChild) - childOps.size(originalChild)
@@ -504,50 +509,50 @@ private[immutable] object implementation {
     override def leftChild(node: N, index: Int): ChildNode = childAt(node, 1 + valueCount(node) + index - 1)
     override def rightChild(node: N, index: Int): ChildNode = childAt(node, 1 + valueCount(node) + index)
 
-    override def deleteFromRoot(node: N, a: A)(implicit builder: Builder): Option[Either[N, ChildNode]] = {
+    override def deleteFromRoot(node: N, a: A)(implicit builder: Builder): Nullable[Either[N, ChildNode]] = {
       val children = valueCount(node)
       val (index, result) = deleteValue(node, a)
       result match {
-        case None =>
-          None
-        case Some(Left(merged)) if children == 1 =>
-          Some(Right(merged))
-        case Some(Left(merged)) if children > 1 =>
-          Some(Left(replaceMergedChildren(node, index, merged)))
-        case Some(Right((left, middle, right))) =>
-          Some(Left(replaceUpdatedChildren(node, index, left, middle, right)))
+        case null =>
+          null
+        case Left(merged) if children == 1 =>
+          Right(merged)
+        case Left(merged) if children > 1 =>
+          Left(replaceMergedChildren(node, index, merged))
+        case Right((left, middle, right)) =>
+          Left(replaceUpdatedChildren(node, index, left, middle, right))
       }
     }
-    def deleteAndMergeLeft(leftSibling: N, leftValue: A, node: N, a: A)(implicit builder: Builder): Option[Either[N, (N, A, N)]] = {
+    def deleteAndMergeLeft(leftSibling: N, leftValue: A, node: N, a: A)(implicit builder: Builder): Nullable[Either[N, (N, A, N)]] = {
       val children = valueCount(node)
       val (index, result) = deleteValue(node, a)
       result match {
-        case None =>
-          None
-        case Some(Left(merged)) if children == minValues && valueCount(leftSibling) == minValues =>
-          Some(Left(replaceMergedChildAndMergeWithLeft(leftSibling, leftValue, node, index, merged)))
-        case Some(Left(merged)) if children > minValues =>
-          Some(Right((leftSibling, leftValue, replaceMergedChildren(node, index, merged))))
-        case Some(Left(merged)) if valueCount(leftSibling) > minValues =>
-          Some(Right(replaceMergedChildAndTakeFromLeft(leftSibling, leftValue, node, index, merged)))
-        case Some(Right((left, middle, right))) =>
-          Some(Right((leftSibling, leftValue, replaceUpdatedChildren(node, index, left, middle, right))))
+        case null =>
+          null
+        case Left(merged) if children == minValues && valueCount(leftSibling) == minValues =>
+          Left(replaceMergedChildAndMergeWithLeft(leftSibling, leftValue, node, index, merged))
+        case Left(merged) if children > minValues =>
+          Right((leftSibling, leftValue, replaceMergedChildren(node, index, merged)))
+        case Left(merged) if valueCount(leftSibling) > minValues =>
+          Right(replaceMergedChildAndTakeFromLeft(leftSibling, leftValue, node, index, merged))
+        case Right((left, middle, right)) =>
+          Right((leftSibling, leftValue, replaceUpdatedChildren(node, index, left, middle, right)))
       }
     }
-    def deleteAndMergeRight(node: N, rightValue: A, rightSibling: N, a: A)(implicit builder: Builder): Option[Either[N, (N, A, N)]] = {
+    def deleteAndMergeRight(node: N, rightValue: A, rightSibling: N, a: A)(implicit builder: Builder): Nullable[Either[N, (N, A, N)]] = {
       val children = valueCount(node)
       val (index, result) = deleteValue(node, a)
       result match {
-        case None =>
-          None
-        case Some(Left(merged)) if children == minValues && valueCount(rightSibling) == minValues =>
-          Some(Left(replaceMergedChildAndMergeWithRight(node, rightValue, rightSibling, index, merged)))
-        case Some(Left(merged)) if children > minValues =>
-          Some(Right((replaceMergedChildren(node, index, merged), rightValue, rightSibling)))
-        case Some(Left(merged)) if valueCount(rightSibling) > minValues =>
-          Some(Right(replaceMergedChildAndTakeFromRight(node, rightValue, rightSibling, index, merged)))
-        case Some(Right((left, middle, right))) =>
-          Some(Right((replaceUpdatedChildren(node, index, left, middle, right), rightValue, rightSibling)))
+        case null =>
+          null
+        case Left(merged) if children == minValues && valueCount(rightSibling) == minValues =>
+          Left(replaceMergedChildAndMergeWithRight(node, rightValue, rightSibling, index, merged))
+        case Left(merged) if children > minValues =>
+          Right((replaceMergedChildren(node, index, merged), rightValue, rightSibling))
+        case Left(merged) if valueCount(rightSibling) > minValues =>
+          Right(replaceMergedChildAndTakeFromRight(node, rightValue, rightSibling, index, merged))
+        case Right((left, middle, right)) =>
+          Right((replaceUpdatedChildren(node, index, left, middle, right), rightValue, rightSibling))
       }
     }
     override def rebalance(left: N, right: N)(implicit builder: Builder): Either[N, (N, A, N)] = {
@@ -602,10 +607,10 @@ private[immutable] object implementation {
       }
     }
 
-    override def pathToHead(node: N, parent: PathNode[A]): PathNode[A] =
+    override def pathToHead(node: N, parent: Nullable[PathNode[A]]): Nullable[PathNode[A]] =
       childOps.pathToHead(leftChild(node, 1), new PathInternalNode(node, 0, parent))
 
-    override def pathToKey(node: N, key: A, parent: PathNode[A]): PathNode[A] = {
+    override def pathToKey(node: N, key: A, parent: Nullable[PathNode[A]]): Nullable[PathNode[A]] = {
       val children = valueCount(node)
       val index = search(node, key)
       if (index >= 0) new PathInternalNode(node, (index - 1) * 2 + 1, parent)
@@ -764,10 +769,10 @@ private[immutable] object implementation {
       }
     }
 
-    private def deleteValue(node: N, a: A)(implicit builder: Builder): (Int, Option[Either[ChildNode, (ChildNode, A, ChildNode)]]) = {
+    private def deleteValue(node: N, a: A)(implicit builder: Builder): (Int, Nullable[Either[ChildNode, (ChildNode, A, ChildNode)]]) = {
       val index = search(node, a)
       if (index >= 0) {
-        (index, Some(childOps.rebalance(leftChild(node, index), rightChild(node, index))(builder.down)))
+        (index, childOps.rebalance(leftChild(node, index), rightChild(node, index))(builder.down))
       } else {
         val insertionPoint = -index - 1
         val children = valueCount(node)
@@ -890,6 +895,7 @@ private[immutable] object implementation {
     override def +(a: A) = {
       val builder = ops.newBuilder
       ops.insert(root, a, overwrite = false)(builder) match {
+        case null       => this
         case Left(node) => new Root(node)
         case Right((left, middle, right)) =>
           val rootBuilder = builder.up
@@ -904,9 +910,9 @@ private[immutable] object implementation {
 
     override def -(a: A): BTreeSet[A] = {
       ops.deleteFromRoot(root, a)(ops.newBuilder) match {
-        case None                => this
-        case Some(Left(updated)) => new Root(updated)
-        case Some(Right(child))  => new Root(child)(ops.ordering, ops.childOps)
+        case null          => this
+        case Left(updated) => new Root(updated)
+        case Right(child)  => new Root(child)(ops.ordering, ops.childOps)
       }
     }
     override def isEmpty: Boolean = ops.isEmpty(root)
@@ -984,8 +990,6 @@ private[immutable] object implementation {
     override def takeWhile(p: A => Boolean) = take(countWhile(p))
     override def span(p: A => Boolean) = splitAt(countWhile(p))
   }
-
-  def TODO = throw new RuntimeException("TODO")
 
   sealed trait PathNode[A] {
     def current: A

@@ -4,12 +4,13 @@ import scala.collection.immutable.{ HashSet, SortedSet, TreeSet }
 
 object BTreeSetThyme {
   val random = new util.Random(1233312)
-  val values = Vector.tabulate(1000000)(_.asInstanceOf[java.lang.Integer])
+  val values = Vector.tabulate(4000000)(_.asInstanceOf[java.lang.Integer])
   val shuffled = random.shuffle(values)
 
   lazy val th = new ichi.bench.Thyme()
 
-  val DefaultSizes = Vector(1000, 1, 10, 100, 1000, 10000, 100000, 1000000)
+  lazy val fib: Stream[Int] = 1 #:: 1 #:: fib.zip(fib.tail).map { case (a, b) => a + b }
+  val DefaultSizes = 1000 +: fib.takeWhile(_ <= values.size).toVector //Vector(1000, 1, 10, 100, 1000, 10000, 100000, 1000000)
   val DefaultParameters = Vector(
     BTreeSet.Parameters(6, 5),
     BTreeSet.Parameters(8, 8),
@@ -31,6 +32,19 @@ object BTreeSetThyme {
     th.pbenchOff(s"contains $i shuffled values")(xs.forall(btree.contains), ftitle = "btree")(xs.forall(ts.contains), htitle = "treeset")
   }
 
+  def containsSomeShuffled(sizes: Seq[Int] = DefaultSizes): Unit = sizes foreach { i =>
+    val xs = shuffled.take(i)
+    val toCheck = xs.take((i + 9) / 10)
+    val btree = BTreeSet(xs: _*)
+    val ts = TreeSet(xs: _*)
+    th.pbenchOff(s"contains ${toCheck.size} shuffled values in tree of ${xs.size} elements")(toCheck.forall(btree.contains), ftitle = "btree")(toCheck.forall(ts.contains), htitle = "treeset")
+  }
+  def notContainsSomeShuffled(sizes: Seq[Int] = DefaultSizes): Unit = sizes foreach { i =>
+    val (toCheck, xs) = shuffled.take(i).splitAt((i + 9) / 10)
+    val btree = BTreeSet(xs: _*)
+    val ts = TreeSet(xs: _*)
+    th.pbenchOff(s"not contains ${toCheck.size} shuffled values in tree of ${xs.size} elements")(toCheck.forall(btree.contains), ftitle = "btree")(toCheck.forall(ts.contains), htitle = "treeset")
+  }
   def insertSequential(sizes: Seq[Int] = DefaultSizes): Unit = sizes foreach { i =>
     val xs = BTreeSetThyme.values.take(i)
     th.pbenchOff(s"insert $i sequential values")(xs.foldLeft(BTreeSet.empty[Int])(_ + _).size, ftitle = "btree")(xs.foldLeft(TreeSet.empty[Int])(_ + _).size, htitle = "treeset")
@@ -39,6 +53,13 @@ object BTreeSetThyme {
   def insertShuffled(sizes: Seq[Int] = DefaultSizes): Unit = sizes foreach { i =>
     val xs = BTreeSetThyme.shuffled.take(i)
     th.pbenchOff(s"insert $i shuffled values")(xs.foldLeft(BTreeSet.empty[Int])(_ + _).size, ftitle = "btree")(xs.foldLeft(TreeSet.empty[Int])(_ + _).size, htitle = "treeset")
+  }
+
+  def insertSomeShuffled(sizes: Seq[Int] = DefaultSizes): Unit = sizes foreach { i =>
+    val (toInsert, xs) = shuffled.take(i).splitAt((i + 9) / 10)
+    val btree = BTreeSet(xs: _*)
+    val ts = TreeSet(xs: _*)
+    th.pbenchOff(s"insert ${toInsert.size} shuffled values into tree of ${xs.size} elements")(toInsert.foldLeft(btree)(_ + _).size, ftitle = "btree")(toInsert.foldLeft(ts)(_ + _).size, htitle = "treeset")
   }
 
   def insertShuffled2(sizes: Seq[Int] = DefaultSizes): Unit = sizes foreach { i =>
@@ -58,6 +79,14 @@ object BTreeSetThyme {
     val btree = BTreeSet(xs: _*)
     val ts = TreeSet(xs: _*)
     th.pbenchOff(s"delete $i shuffled values")(xs.foldLeft(btree)(_ - _).isEmpty, ftitle = "btree")(xs.foldLeft(ts)(_ - _).isEmpty, htitle = "treeset")
+  }
+
+  def deleteSomeShuffled(sizes: Seq[Int] = DefaultSizes): Unit = sizes foreach { i =>
+    val xs = BTreeSetThyme.shuffled.take(i)
+    val toDelete = xs.take((i + 9) / 10)
+    val btree = BTreeSet(xs: _*)
+    val ts = TreeSet(xs: _*)
+    th.pbenchOff(s"delete ${toDelete.size} of ${xs.size} shuffled values")(toDelete.foldLeft(btree)(_ - _).size, ftitle = "btree")(toDelete.foldLeft(ts)(_ - _).size, htitle = "treeset")
   }
 
   def iterateShuffled(sizes: Seq[Int] = DefaultSizes): Unit = sizes foreach { i =>
